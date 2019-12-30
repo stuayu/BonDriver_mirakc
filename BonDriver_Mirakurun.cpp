@@ -1,27 +1,38 @@
 ﻿#include "BonDriver_Mirakurun.h"
 
-#pragma comment(lib, "ws2_32.lib")
-
-#define BITRATE_CALC_TIME	500		//ms
-
 //////////////////////////////////////////////////////////////////////
 // 定数定義
 //////////////////////////////////////////////////////////////////////
 
 // ミューテックス名
-#define MUTEX_NAME			TEXT(TUNER_NAME)
+#define MUTEX_NAME TEXT(TUNER_NAME)
 
-// FIFOバッファ設定
-#define ASYNCBUFFTIME		2											// バッファ長 = 2秒
-#define ASYNCBUFFSIZE		( 0x200000 / TSDATASIZE * ASYNCBUFFTIME )	// 平均16Mbpsとする
 
-#define REQRESERVNUM		8				// 非同期リクエスト予約数 //before 16
-#define REQPOLLINGWAIT		20				// 非同期リクエストポーリング間隔(ms) //before 10
+//////////////////////////////////////////////////////////////////////
+// DLLMain
+//////////////////////////////////////////////////////////////////////
 
-// 非同期リクエスト状態
-#define IORS_IDLE			0x00			// リクエスト空
-#define IORS_BUSY			0x01			// リクエスト受信中
-#define IORS_RECV			0x02			// 受信完了、ストア待ち
+BOOL APIENTRY DllMain(HINSTANCE hModule, DWORD fdwReason, LPVOID lpReserved)
+{
+	switch (fdwReason) {
+	case DLL_PROCESS_ATTACH:
+		if (Init(hModule) != 0) {
+			return FALSE;
+		}
+		// モジュールハンドル保存
+		CBonTuner::m_hModule = hModule;
+		break;
+
+	case DLL_PROCESS_DETACH:
+		// 未開放の場合はインスタンス開放
+		if (CBonTuner::m_pThis) {
+			CBonTuner::m_pThis->Release();
+		}
+		break;
+	}
+
+	return TRUE;
+}
 
 static int Init(HMODULE hModule)
 {
@@ -52,67 +63,7 @@ static int Init(HMODULE hModule)
 	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
 	g_Service_Split = GetPrivateProfileInt(L"GLOBAL", L"SERVICE_SPLIT", 0, g_IniFilePath);
 
-	setlocale(LC_ALL, "japanese");
-
-	g_MagicPacket_Enable = GetPrivateProfileInt(L"GLOBAL", L"MAGICPACKET_ENABLE", 0, g_IniFilePath);
-
-	if (g_MagicPacket_Enable) {
-		wchar_t tmpMagicPacket_TargetMAC[18];
-		GetPrivateProfileString(L"GLOBAL", L"MAGICPACKET_TARGETMAC", L"00:00:00:00:00:00", tmpMagicPacket_TargetMAC, sizeof(tmpMagicPacket_TargetMAC), g_IniFilePath);
-		wcstombs_s(&ret, g_MagicPacket_TargetMAC, tmpMagicPacket_TargetMAC, sizeof(g_MagicPacket_TargetMAC));
-
-
-		for (int i = 0; i < 6; i++) {
-			BYTE b = 0;
-			char *p = &g_MagicPacket_TargetMAC[i * 3];
-			for (int j = 0; j < 2; j++) {
-				if (*p >= '0' && *p <= '9') {
-					b = b * 0x10 + (*p - '0');
-				} else if (*p >= 'a' && *p <= 'f') {
-					b = b * 0x10 + (10 + *p - 'a');
-				} else if (*p >= 'A' && *p <= 'F') {
-					b = b * 0x10 + (10 + *p - 'A');
-				}
-				p++;
-			}
-			g_MagicPacket_TargetMAC[i] = b;
-		}
-		wchar_t tmpMagicPacket_TargetIP[16];
-		GetPrivateProfileString(L"GLOBAL", L"MAGICPACKET_TARGETIP", L"0.0.0.0", tmpMagicPacket_TargetIP, sizeof(tmpMagicPacket_TargetIP), g_IniFilePath);
-		wcstombs_s(&ret, g_MagicPacket_TargetIP, tmpMagicPacket_TargetIP, sizeof(g_MagicPacket_TargetIP));
-
-	}
-
 	return 0;
-}
-
-BOOL APIENTRY DllMain(HINSTANCE hModule, DWORD fdwReason, LPVOID lpReserved)
-{
-	switch (fdwReason) {
-		case DLL_PROCESS_ATTACH:
-			if (Init(hModule) != 0) {
-				return FALSE;
-			}
-			// モジュールハンドル保存
-			CBonTuner::m_hModule = hModule;
-			break;
-
-		case DLL_PROCESS_DETACH:
-			// 未開放の場合はインスタンス開放
-			if (CBonTuner::m_pThis) {
-				CBonTuner::m_pThis->Release();
-			}
-			break;
-	}
-
-	return TRUE;
-}
-
-inline DWORD DiffTime(DWORD BeginTime,DWORD EndTime)
-{
-	if (BeginTime <= EndTime)
-		return EndTime-BeginTime;
-	return (0xFFFFFFFFUL-BeginTime)+EndTime+1UL;
 }
 
 
@@ -138,34 +89,26 @@ HINSTANCE CBonTuner::m_hModule = NULL;
 CBonTuner::CBonTuner()
 	: m_bTunerOpen(FALSE)
 	, m_hMutex(NULL)
-	, m_pIoReqBuff(NULL)
-	, m_pIoPushReq(NULL)
-	, m_pIoPopReq(NULL)
-	, m_pIoGetReq(NULL)
-	, m_dwBusyReqNum(0UL)
-	, m_dwReadyReqNum(0UL)
-	, m_hPushIoThread(NULL)
-	, m_hPopIoThread(NULL)
+	, m_hRecvThread(NULL)
 	, m_hOnStreamEvent(NULL)
+	, m_hStopEvent(NULL)
 	, m_dwCurSpace(0UL)
 	, m_dwCurChannel(0xFFFFFFFFUL)
+	, m_res(NULL)
 	, m_sock(INVALID_SOCKET)
-	, m_fBitRate(0.0f)
-	, m_dwRecvBytes(0UL)
-	, m_dwLastCalcTick(0UL)
+	, m_pGrabTsData(NULL)
 {
 	m_pThis = this;
+
+	::InitializeCriticalSection(&m_CriticalSection);
+
+	// GrabTsDataインスタンス作成
+	m_pGrabTsData = new GrabTsData(&m_hOnStreamEvent);
 
 	// グローバル変数初期化
 	for (int i = 0; i < SPACE_NUM; i++) {
 		g_pType[i] = NULL;
 	}
-	
-	// クリティカルセクション初期化
-	::InitializeCriticalSection(&m_CriticalSection);
-
-	//Initialize channel
-	InitChannel();
 }
 
 CBonTuner::~CBonTuner()
@@ -183,234 +126,113 @@ CBonTuner::~CBonTuner()
 		}
 	}
 
-	// クリティカルセクション削除
-	::DeleteCriticalSection(&m_CriticalSection);
-
-	// Winsock終了
-	if (m_bTunerOpen) {
-		WSACleanup();
+	// GrabTsDataインスタンス開放
+	if (m_pGrabTsData) {
+		delete m_pGrabTsData;
 	}
+
+	// イベント開放
+	if (m_hStopEvent) {
+		::CloseHandle(m_hStopEvent);
+	}
+	if (m_hOnStreamEvent) {
+		::CloseHandle(m_hOnStreamEvent);
+	}
+	::DeleteCriticalSection(&m_CriticalSection);
 
 	m_pThis = NULL;
 }
 
-void CBonTuner::InitChannel()
-{
-	// Mirakurun APIよりchannel取得
-	GetApiChannels(&g_Channel_JSON, g_Service_Split);
-	if (g_Channel_JSON.is<picojson::null>()) {
-		return;
-	}
-	if (!g_Channel_JSON.contains(0)) {
-		return;
-	}
-
-	// チューナ空間取得
-	int i = 0;
-	int j = 0;
-	while (j < SPACE_NUM - 1) {
-		if (!g_Channel_JSON.contains(i)) {
-			break;
-		}
-		picojson::object& channel_obj = g_Channel_JSON.get(i).get<picojson::object>();
-		const char *type;
-		if (g_Service_Split == 1) {
-			picojson::object& channel_detail = channel_obj["channel"].get<picojson::object>();
-			type = channel_detail["type"].get<std::string>().c_str();
-		}
-		else {
-			type = channel_obj["type"].get<std::string>().c_str();
-		}
-		if (!g_pType[0]) {
-			int len = (int)strlen(type) + 1;
-			g_pType[0] = (char *)malloc(len);
-			if (!g_pType[0]) {
-				break;
-			}
-			strcpy_s(g_pType[0], len, type);
-		}
-		else if (strcmp(g_pType[j], type)) {
-			int len = (int)strlen(type) + 1;
-			g_pType[++j] = (char *)malloc(len);
-			if (!g_pType[j]) {
-				j--;
-				break;
-			}
-			strcpy_s(g_pType[j], len, type);
-			g_Channel_Base[j] = i;
-		}
-		i++;
-	}
-	g_Max_Type = j;
-}
-
 const BOOL CBonTuner::OpenTuner()
 {
-	if (g_Channel_JSON.is<picojson::null>()) {
-		return FALSE;
-	}
+	// ミューテックス作成
+	m_hMutex = ::CreateMutex(NULL, TRUE, MUTEX_NAME);
 
-	if (!m_bTunerOpen) {
+	while (1) {
+		// ホスト名解決
+		struct addrinfo hints;
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_STREAM;
+		hints.ai_protocol = IPPROTO_TCP;
+		hints.ai_flags = AI_NUMERICSERV;
+		if (getaddrinfo(g_ServerHost, g_ServerPort, &hints, &m_res) < 0) {
+			break;
+		}
+
 		// Winsock初期化
 		WSADATA stWsa;
-		if (WSAStartup(MAKEWORD(2,2), &stWsa) != 0) {
-			return FALSE;
+		if (WSAStartup(MAKEWORD(2, 2), &stWsa) != 0) {
+			break;
 		}
-		if (g_MagicPacket_Enable) {
-			char magicpacket[102];
-			memset(&magicpacket, 0xff, 6);
-			for (int i = 0; i < 16; i++) {
-				memcpy(&magicpacket[i * 6 + 6], g_MagicPacket_TargetMAC, 6);
-			}
-			SOCKET s = socket(PF_INET, SOCK_DGRAM, 0);
-			if (s == SOCKET_ERROR) {
-				return FALSE;
-			}
-			SOCKADDR_IN addr;
-			addr.sin_family = AF_INET;
-			addr.sin_port = htons(9);
-			addr.sin_addr.S_un.S_addr = inet_addr(g_MagicPacket_TargetIP);
-
-			sendto(s, magicpacket, sizeof(magicpacket), 0, (LPSOCKADDR)&addr, sizeof(addr));
-
-			DWORD dwLastTime = ::GetTickCount();
-			int countdown = 0;
-			for (countdown = 0; countdown < MAGICPACKET_WAIT_SECONDS; countdown++) {
-				try {
-					struct addrinfo hints;
-					struct addrinfo* res = NULL;
-					struct addrinfo* ai;
-
-					memset(&hints, 0, sizeof(hints));
-					hints.ai_family = AF_INET6;	//IPv6優先
-					hints.ai_socktype = SOCK_STREAM;
-					hints.ai_protocol = IPPROTO_TCP;
-					hints.ai_flags = AI_NUMERICSERV;
-					if (getaddrinfo(g_ServerHost, g_ServerPort, &hints, &res) != 0) {
-						//printf("getaddrinfo(): %s\n", gai_strerror(err));
-						hints.ai_family = AF_INET;	//IPv4限定
-						if (getaddrinfo(g_ServerHost, g_ServerPort, &hints, &res) != 0) {
-							throw 1UL;
-						}
-					}
-
-					for (ai = res; ai; ai = ai->ai_next) {
-						m_sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-						if (m_sock == INVALID_SOCKET) {
-							continue;
-						}
-
-						if (connect(m_sock, ai->ai_addr, (int)ai->ai_addrlen) >= 0) {
-							// OK
-							break;
-						}
-						closesocket(m_sock);
-						m_sock = INVALID_SOCKET;
-					}
-					freeaddrinfo(res);
-
-					if (m_sock == INVALID_SOCKET) {
-						TCHAR szDebugOut[128];
-						::wsprintf(szDebugOut, TEXT("%s: CBonTuner::OpenTuner() connection error %d\n"), TUNER_NAME, WSAGetLastError());
-						::OutputDebugString(szDebugOut);
-						throw 1UL;
-					}
-
-					const char serverRequest[] = "GET / HTTP/1.0\r\n\r\n";
-					if (send(m_sock, serverRequest, (int)strlen(serverRequest), 0) < 0) {
-						TCHAR szDebugOut[128];
-						::wsprintf(szDebugOut, TEXT("%s: CBonTuner::OpenTuner() send error %d\n"), TUNER_NAME, WSAGetLastError());
-						::OutputDebugString(szDebugOut);
-						throw 1UL;
-					}
-
-					// Success
-					break;
-				}
-				catch (const DWORD dwErrorStep) {
-					if (::GetTickCount() - dwLastTime > (MAGICPACKET_WAIT_SECONDS * 1000)) {
-						TCHAR szDebugOut[1024];
-						::wsprintf(szDebugOut, TEXT("TimeOut\n"));
-						::OutputDebugString(szDebugOut);
-						return FALSE;
-					}
-					// エラー発生
-					TCHAR szDebugOut[1024];
-					::wsprintf(szDebugOut, TEXT("%s: CBonTuner::OpenTuner() dwErrorStep = %lu\n"), TUNER_NAME, dwErrorStep);
-					::OutputDebugString(szDebugOut);
-					Sleep(1000);
-				}
-			}
-
-			if (countdown >= MAGICPACKET_WAIT_SECONDS) {
-				// Failed
-				return FALSE;
-			}
-		}
-
 		m_bTunerOpen = TRUE;
+
+		//Initialize channel
+		if (!InitChannel()) {
+			break;
+		}
+
+		// イベント作成
+		m_hOnStreamEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+		m_hStopEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+
+		// スレッド起動
+		m_hRecvThread = (HANDLE)_beginthreadex(NULL, 0, CBonTuner::RecvThread, (LPVOID)this, 0, NULL);
+		if (!m_hRecvThread) {
+			break;
+		}
+
+		//return SetChannel(0UL,0UL);
+		return TRUE;
 	}
 
-	//return SetChannel(0UL,0UL);
-	
-	return TRUE;
+	CloseTuner();
+	return FALSE;
 }
 
 void CBonTuner::CloseTuner()
 {
-	// スレッド終了要求セット
-	m_bLoopIoThread = FALSE;
+	// スレッド終了
+	::SetEvent(m_hStopEvent);
+	if (m_hRecvThread) {
+		if (::WaitForSingleObject(m_hRecvThread, 5000) != WAIT_TIMEOUT) {
+			// スレッド強制終了
+			::TerminateThread(m_hRecvThread, 0xffffffff);
+
+			TCHAR szDebugOut[128];
+			::wsprintf(szDebugOut, TEXT("%s: CBonTuner::CloseTuner() ::TerminateThread(m_hRecvThread)\n"), TUNER_NAME);
+			::OutputDebugString(szDebugOut);
+		}
+
+		::CloseHandle(m_hRecvThread);
+		m_hRecvThread = NULL;
+	}
 
 	// イベント開放
+	if (m_hStopEvent) {
+		::CloseHandle(m_hStopEvent);
+		m_hStopEvent = NULL;
+	}
 	if (m_hOnStreamEvent) {
 		::CloseHandle(m_hOnStreamEvent);
 		m_hOnStreamEvent = NULL;
 	}
 
-	// スレッド終了
-	if (m_hPushIoThread) {
-		if (::WaitForSingleObject(m_hPushIoThread, 1000) != WAIT_OBJECT_0) {
-			// スレッド強制終了
-			::TerminateThread(m_hPushIoThread, 0);
-
-			TCHAR szDebugOut[128];
-			::wsprintf(szDebugOut, TEXT("%s: CBonTuner::CloseTuner() ::TerminateThread(m_hPushIoThread)\n"), TUNER_NAME);
-			::OutputDebugString(szDebugOut);
-		}
-
-		::CloseHandle(m_hPushIoThread);
-		m_hPushIoThread = NULL;
-	}
-
-	if (m_hPopIoThread) {
-		if (::WaitForSingleObject(m_hPopIoThread, 1000) != WAIT_OBJECT_0) {
-			// スレッド強制終了
-			::TerminateThread(m_hPopIoThread, 0);
-
-			TCHAR szDebugOut[128];
-			::wsprintf(szDebugOut, TEXT("%s: CBonTuner::CloseTuner() ::TerminateThread(m_hPopIoThread)\n"), TUNER_NAME);
-			::OutputDebugString(szDebugOut);
-		}
-
-		::CloseHandle(m_hPopIoThread);
-		m_hPopIoThread = NULL;
-	}
-
-
-	// バッファ開放
-	FreeIoReqBuff(m_pIoReqBuff);
-	m_pIoReqBuff = NULL;
-	m_pIoPushReq = NULL;
-	m_pIoPopReq = NULL;
-	m_pIoGetReq = NULL;
-
-	m_dwBusyReqNum = 0UL;
-	m_dwReadyReqNum = 0UL;
-
 	// ソケットクローズ
 	if (m_sock != INVALID_SOCKET) {
 		closesocket(m_sock);
 		m_sock = INVALID_SOCKET;
+	}
+
+	// Winsock終了
+	if (m_bTunerOpen) {
+		WSACleanup();
+		m_bTunerOpen = FALSE;
+	}
+
+	if (m_res) {
+		freeaddrinfo(m_res);
+		m_res = NULL;
 	}
 
 	// チャンネル初期化
@@ -423,15 +245,12 @@ void CBonTuner::CloseTuner()
 		::CloseHandle(m_hMutex);
 		m_hMutex = NULL;
 	}
-
-	m_fBitRate = 0.0f;
-	m_dwRecvBytes = 0UL;
 }
 
 const DWORD CBonTuner::WaitTsStream(const DWORD dwTimeOut)
 {
 	// 終了チェック
-	if (!m_hOnStreamEvent || !m_bLoopIoThread) {
+	if (!m_hOnStreamEvent) {
 		return WAIT_ABANDONED;
 	}
 
@@ -445,8 +264,8 @@ const DWORD CBonTuner::WaitTsStream(const DWORD dwTimeOut)
 
 		case WAIT_OBJECT_0 :
 		case WAIT_TIMEOUT :
-			// ストリーム取得可能 or チューナが閉じられた
-			return (m_bLoopIoThread)? dwRet : WAIT_ABANDONED;
+			// ストリーム取得可能
+			return dwRet;
 
 		case WAIT_FAILED :
 		default:
@@ -457,8 +276,11 @@ const DWORD CBonTuner::WaitTsStream(const DWORD dwTimeOut)
 
 const DWORD CBonTuner::GetReadyCount()
 {
-	// 取り出し可能TSデータ数を取得する
-	return m_dwReadyReqNum;
+	DWORD dwCount = 0;
+	if (m_pGrabTsData)
+		m_pGrabTsData->get_ReadyCount(&dwCount);
+
+	return dwCount;
 }
 
 const BOOL CBonTuner::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain)
@@ -479,46 +301,17 @@ const BOOL CBonTuner::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain)
 
 const BOOL CBonTuner::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain)
 {
-	if (!m_pIoGetReq) {
+	if ((!m_bTunerOpen) || (!m_pGrabTsData) ||
+		(m_dwCurChannel == 0xFFFFFFFFUL))
 		return FALSE;
-	}
 
-	// TSデータをバッファから取り出す
-	if (m_dwReadyReqNum) {
-		if (m_pIoGetReq->dwState == IORS_RECV) {
-
-			// データコピー
-			*pdwSize = m_pIoGetReq->dwRxdSize;
-			*ppDst = m_pIoGetReq->RxdBuff;
-
-			// バッファ位置を進める
-			::EnterCriticalSection(&m_CriticalSection);
-			m_pIoGetReq = m_pIoGetReq->pNext;
-			m_dwReadyReqNum--;
-			*pdwRemain = m_dwReadyReqNum;
-			::LeaveCriticalSection(&m_CriticalSection);
-
-			return TRUE;
-		}
-
-		// 例外
-		return FALSE;
-	}
-
-	// 取り出し可能なデータがない
-	*pdwSize = 0;
-	*pdwRemain = 0;
-
-	return TRUE;
+	return m_pGrabTsData->get_TsStream(ppDst, pdwSize, pdwRemain);
 }
 
 void CBonTuner::PurgeTsStream()
 {
-	// バッファから取り出し可能データをパージする
-	::EnterCriticalSection(&m_CriticalSection);
-	m_pIoGetReq = m_pIoPopReq;
-	m_dwReadyReqNum = 0;
-	::LeaveCriticalSection(&m_CriticalSection);
+	if (m_bTunerOpen && m_pGrabTsData)
+		m_pGrabTsData->purge_TsStream();
 }
 
 void CBonTuner::Release()
@@ -597,191 +390,6 @@ const DWORD CBonTuner::GetCurChannel(void)
 	return m_dwCurChannel;
 }
 
-CBonTuner::AsyncIoReq * CBonTuner::AllocIoReqBuff(const DWORD dwBuffNum)
-{
-	if (dwBuffNum < 2) {
-		return NULL;
-	}
-
-	// メモリを確保する
-	AsyncIoReq *pNewBuff = new AsyncIoReq [dwBuffNum];
-	if (!pNewBuff) {
-		return NULL;
-	}
-
-	// ゼロクリア
-	::ZeroMemory(pNewBuff, sizeof(AsyncIoReq) * dwBuffNum);
-
-	// リンクを構築する
-	DWORD dwIndex;
-	for(dwIndex = 0 ; dwIndex < ( dwBuffNum - 1 ) ; dwIndex++) {
-		pNewBuff[dwIndex].pNext= &pNewBuff[dwIndex + 1];
-	}
-
-	pNewBuff[dwIndex].pNext = &pNewBuff[0];
-
-	return pNewBuff;
-}
-
-void CBonTuner::FreeIoReqBuff(CBonTuner::AsyncIoReq *pBuff)
-{
-	if (!pBuff) {
-		return;
-	}
-
-	// バッファを開放する
-	delete [] pBuff;
-}
-
-DWORD WINAPI CBonTuner::PushIoThread(LPVOID pParam)
-{
-	CBonTuner *pThis = (CBonTuner *)pParam;
-
-	DWORD dwLastTime = ::GetTickCount();
-
-//	::OutputDebugString("CBonTuner::PushIoThread() Start!\n");
-
-	// ドライバにTSデータリクエストを発行する
-	while (pThis->m_bLoopIoThread) {
-
-		// リクエスト処理待ちが規定未満なら追加する
-		if (pThis->m_dwBusyReqNum < REQRESERVNUM) {
-
-			// ドライバにTSデータリクエストを発行する(HTTPなので受信要求のみ)
-			if (!pThis->PushIoRequest(pThis->m_sock)) {
-				// エラー発生
-				break;
-			}
-
-		} else {
-			// リクエスト処理待ちがフルの場合はウェイト
-			::Sleep(REQPOLLINGWAIT);
-		}
-	}
-
-//	::OutputDebugString("CBonTuner::PushIoThread() End!\n");
-	return 0;
-}
-
-DWORD WINAPI CBonTuner::PopIoThread(LPVOID pParam)
-{
-	CBonTuner *pThis = (CBonTuner *)pParam;
-
-	// 処理済リクエストをポーリングしてリクエストを完了させる
-	while (pThis->m_bLoopIoThread) {
-
-		// 処理済データがあればリクエストを完了する
-		if (pThis->m_dwBusyReqNum) {
-
-			// リクエストを完了する
-			if (!pThis->PopIoRequest(pThis->m_sock)) {
-				// エラー発生
-				break;
-			}
-		}
-	}
-
-	return 0;
-}
-
-const BOOL CBonTuner::PushIoRequest(SOCKET sock)
-{
-	// ドライバに非同期リクエストを発行する
-
-	// オープンチェック
-	if (sock == INVALID_SOCKET)return FALSE;
-
-	// リクエストセット
-	m_pIoPushReq->dwRxdSize = 0;
-
-	// イベント設定
-	::ZeroMemory(&m_pIoPushReq->OverLapped, sizeof(WSAOVERLAPPED));
-	if (!(m_pIoPushReq->OverLapped.hEvent = ::CreateEvent(NULL, TRUE, FALSE, NULL)))return FALSE;
-
-	// HTTP受信を要求スルニダ！
-	DWORD Flags = 0;
-	WSABUF wsaBuf;
-	wsaBuf.buf = (char *)m_pIoPushReq->RxdBuff;
-	wsaBuf.len = sizeof(m_pIoPushReq->RxdBuff);
-	if (SOCKET_ERROR == WSARecv(sock, &wsaBuf, 1, &m_pIoPushReq->dwRxdSize, &Flags, &m_pIoPushReq->OverLapped, NULL)) {
-		int sock_err = WSAGetLastError();
-		if (sock_err != ERROR_IO_PENDING) {
-			return FALSE;
-		}
-	}
-
-	m_pIoPushReq->dwState = IORS_BUSY;
-
-	// バッファ状態更新
-	::EnterCriticalSection(&m_CriticalSection);
-	m_pIoPushReq = m_pIoPushReq->pNext;
-	m_dwBusyReqNum++;
-	::LeaveCriticalSection(&m_CriticalSection);
-
-	return TRUE;
-}
-
-const BOOL CBonTuner::PopIoRequest(SOCKET sock)
-{
-	// 非同期リクエストを完了する
-
-	// オープンチェック
-	if (sock == INVALID_SOCKET) {
-		return FALSE;
-	}
-
-	// 状態チェック
-	if (m_pIoPopReq->dwState != IORS_BUSY) {
-		// 例外
-		return TRUE;
-	}
-
-	// リクエスト取得
-	DWORD Flags=0;
-	const BOOL bRet = ::WSAGetOverlappedResult(sock, &m_pIoPopReq->OverLapped, &m_pIoPopReq->dwRxdSize, FALSE, &Flags);
-
-	// エラーチェック
-	if (!bRet) {
-		int sock_err = WSAGetLastError();
-		if (sock_err == ERROR_IO_INCOMPLETE) {
-			// 処理未完了
-			::Sleep(REQPOLLINGWAIT);
-			return TRUE;
-		}
-	}
-
-	// 総受信サイズ加算
-	m_dwRecvBytes += m_pIoPopReq->dwRxdSize;
-
-	// ビットレート計算
-	if (DiffTime(m_dwLastCalcTick,::GetTickCount()) >= BITRATE_CALC_TIME) {
-		CalcBitRate();
-	}
-
-	// イベント削除
-	::CloseHandle(m_pIoPopReq->OverLapped.hEvent);
-
-	if (!bRet) {
-		// エラー発生
-		return FALSE;
-	}
-
-	m_pIoPopReq->dwState = IORS_RECV;
-
-	// バッファ状態更新
-	::EnterCriticalSection(&m_CriticalSection);
-	m_pIoPopReq = m_pIoPopReq->pNext;
-	m_dwBusyReqNum--;
-	m_dwReadyReqNum++;
-	::LeaveCriticalSection(&m_CriticalSection);
-
-	// イベントセット
-	::SetEvent(m_hOnStreamEvent);
-
-	return TRUE;
-}
-
-
 // チャンネル設定
 const BOOL CBonTuner::SetChannel(const BYTE bCh)
 {
@@ -792,148 +400,36 @@ const BOOL CBonTuner::SetChannel(const BYTE bCh)
 const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 {
 	if (dwSpace > g_Max_Type) {
-		return NULL;
+		return FALSE;
 	}
 
 	DWORD Bon_Channel = dwChannel + g_Channel_Base[dwSpace];
 	if (!g_Channel_JSON.contains(Bon_Channel)) {
-		return NULL;
+		return FALSE;
 	}
 
 	picojson::object& channel_obj = g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
 	const char *type;
 	const char *channel;
-	char serviceId[6];
+	char id[11];
 	if (g_Service_Split == 1) {
-		picojson::object& channel_detail = channel_obj["channel"].get<picojson::object>();
-		type = channel_detail["type"].get<std::string>().c_str();
-		channel = channel_detail["channel"].get<std::string>().c_str();
-		sprintf_s(serviceId, "%u", (DWORD)channel_obj["serviceId"].get<double>());
+		sprintf_s(id, "%u", (DWORD)channel_obj["id"].get<double>());
 	}
 	else {
 		type = channel_obj["type"].get<std::string>().c_str();
 		channel = channel_obj["channel"].get<std::string>().c_str();
 	}
 
-	// 一旦クローズ
-	CloseTuner();
-
-	// バッファ確保
-	if (!(m_pIoReqBuff = AllocIoReqBuff(ASYNCBUFFSIZE))) {
-		return FALSE;
+	// Server request
+	char url[128];
+	if (g_Service_Split == 1) {
+		sprintf_s(url, "/api/services/%s/stream?decode=%d", id, g_DecodeB25);
 	}
-
-	// バッファ位置同期
-	m_pIoPushReq = m_pIoReqBuff;
-	m_pIoPopReq = m_pIoReqBuff;
-	m_pIoGetReq = m_pIoReqBuff;
-	m_dwBusyReqNum = 0;
-	m_dwReadyReqNum = 0;
-
-	try{
-		char url[128];
-		char serverRequest[256];
-
-		// URL生成
-		if (g_Service_Split == 1) {
-			sprintf_s(url, "/api/channels/%s/%s/services/%s/stream?decode=%d", type, channel, serviceId, g_DecodeB25);
-		}
-		else {
-			sprintf_s(url, "/api/channels/%s/%s/stream?decode=%d", type, channel, g_DecodeB25);
-		}
-		sprintf_s(serverRequest, "GET %s HTTP/1.0\r\nX-Mirakurun-Priority: %d\r\n\r\n", url, g_Priority);
-
-		struct addrinfo hints;
-		struct addrinfo* res = NULL;
-		struct addrinfo* ai;
-
-		memset(&hints, 0, sizeof(hints));
-		hints.ai_family = AF_INET6;	//IPv6優先
-		hints.ai_socktype = SOCK_STREAM;
-		hints.ai_protocol = IPPROTO_TCP;
-		hints.ai_flags = AI_NUMERICSERV;
-		if (getaddrinfo(g_ServerHost, g_ServerPort, &hints, &res) != 0) {
-			//printf("getaddrinfo(): %s\n", gai_strerror(err));
-			hints.ai_family = AF_INET;	//IPv4限定
-			if (getaddrinfo(g_ServerHost, g_ServerPort, &hints, &res) != 0) {
-				throw 1UL;
-			}
-		}
-
-		for (ai = res; ai; ai = ai->ai_next) {
-			m_sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-			if (m_sock == INVALID_SOCKET) {
-				continue;
-			}
-
-			if (connect(m_sock, ai->ai_addr, (int)ai->ai_addrlen) >= 0) {
-				// OK
-				break;
-			}
-			closesocket(m_sock);
-			m_sock = INVALID_SOCKET;
-		}
-		freeaddrinfo(res);
-
-		if (m_sock == INVALID_SOCKET) {
-			TCHAR szDebugOut[128];
-			::wsprintf(szDebugOut, TEXT("%s: CBonTuner::OpenTuner() connection error %d\n"), TUNER_NAME, WSAGetLastError());
-			::OutputDebugString(szDebugOut);
-			throw 1UL;
-		}
-
-		if (send(m_sock, serverRequest, (int)strlen(serverRequest), 0) < 0) {
-			TCHAR szDebugOut[128];
-			::wsprintf(szDebugOut, TEXT("%s: CBonTuner::OpenTuner() send error %d\n"), TUNER_NAME, WSAGetLastError());
-			::OutputDebugString(szDebugOut);
-			throw 1UL;
-		}
-
-		// イベント作成
-		if (!(m_hOnStreamEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL))) {
-			throw 2UL;
-		}
-
-		// スレッド起動
-		DWORD dwPushIoThreadID = 0UL, dwPopIoThreadID = 0UL;
-		m_hPushIoThread = ::CreateThread(NULL, 0UL, CBonTuner::PushIoThread, this, CREATE_SUSPENDED, &dwPopIoThreadID);
-		m_hPopIoThread = ::CreateThread(NULL, 0UL, CBonTuner::PopIoThread, this, CREATE_SUSPENDED, &dwPushIoThreadID);
-
-		if (!m_hPushIoThread || !m_hPopIoThread) {
-			if (m_hPushIoThread) {
-				::TerminateThread(m_hPushIoThread, 0UL);
-				::CloseHandle(m_hPushIoThread);
-				m_hPushIoThread = NULL;
-			}
-
-			if (m_hPopIoThread) {
-				::TerminateThread(m_hPopIoThread, 0UL);
-				::CloseHandle(m_hPopIoThread);
-				m_hPopIoThread = NULL;
-			}
-
-			throw 3UL;
-		}
-
-		// スレッド開始
-		m_bLoopIoThread = TRUE;
-		if (::ResumeThread(m_hPushIoThread) == 0xFFFFFFFFUL || ::ResumeThread(m_hPopIoThread) == 0xFFFFFFFFUL) {
-			throw 4UL;
-		}
-
-		// ミューテックス作成
-		if (!(m_hMutex = ::CreateMutex(NULL, TRUE, MUTEX_NAME))) {
-			throw 5UL;
-		}
-
-	} catch (const DWORD dwErrorStep) {
-		// エラー発生
-		TCHAR szDebugOut[1024];
-		::wsprintf(szDebugOut, TEXT("%s: CBonTuner::OpenTuner() dwErrorStep = %lu\n"), TUNER_NAME, dwErrorStep);
-		::OutputDebugString(szDebugOut);
-
-		CloseTuner();
+	else {
+		sprintf_s(url, "/api/channels/%s/%s/stream?decode=%d", type, channel, g_DecodeB25);
+	}
+	if (!sendURL(url)) {
 		return FALSE;
 	}
 
@@ -950,55 +446,191 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 // 信号レベル(ビットレート)取得
 const float CBonTuner::GetSignalLevel(void)
 {
-	CalcBitRate();
-	return m_fBitRate;
+	// チャンネル番号不明時は0を返す
+	float fSignalLevel = 0;
+	if (m_dwCurChannel != 0xFFFFFFFFUL && m_pGrabTsData)
+		m_pGrabTsData->get_Bitrate(&fSignalLevel);
+	return fSignalLevel;
 }
 
-void CBonTuner::CalcBitRate()
+BOOL CBonTuner::InitChannel()
 {
-	DWORD dwCurrentTick = GetTickCount();
-	DWORD Span = DiffTime(m_dwLastCalcTick,dwCurrentTick);
-
-	if (Span >= BITRATE_CALC_TIME) {
-		m_fBitRate = (float)(((double)m_dwRecvBytes*(8*1000))/((double)Span*(1024*1024)));
-		m_dwRecvBytes = 0;
-		m_dwLastCalcTick = dwCurrentTick;
+	// Mirakurun APIよりchannel取得
+	if (!GetApiChannels(&g_Channel_JSON, g_Service_Split)) {
+		return FALSE;
 	}
-	return;
+	if (g_Channel_JSON.is<picojson::null>()) {
+		return FALSE;
+	}
+	if (!g_Channel_JSON.contains(0)) {
+		return FALSE;
+	}
+
+	// チューナ空間取得
+	int i = 0;
+	int j = 0;
+	while (j < SPACE_NUM - 1) {
+		if (!g_Channel_JSON.contains(i)) {
+			break;
+		}
+		picojson::object& channel_obj = g_Channel_JSON.get(i).get<picojson::object>();
+		const char* type;
+		if (g_Service_Split == 1) {
+			picojson::object& channel_detail = channel_obj["channel"].get<picojson::object>();
+			type = channel_detail["type"].get<std::string>().c_str();
+		}
+		else {
+			type = channel_obj["type"].get<std::string>().c_str();
+		}
+		if (!g_pType[0]) {
+			int len = (int)strlen(type) + 1;
+			g_pType[0] = (char*)malloc(len);
+			if (!g_pType[0]) {
+				break;
+			}
+			strcpy_s(g_pType[0], len, type);
+		}
+		else if (strcmp(g_pType[j], type)) {
+			int len = (int)strlen(type) + 1;
+			g_pType[++j] = (char*)malloc(len);
+			if (!g_pType[j]) {
+				j--;
+				break;
+			}
+			strcpy_s(g_pType[j], len, type);
+			g_Channel_Base[j] = i;
+		}
+		i++;
+	}
+	g_Max_Type = j;
+
+	return TRUE;
 }
 
-void CBonTuner::GetApiChannels(picojson::value* channel_json, int service_split)
+BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 {
-	HttpClient client;
-	char url[512];
-	sprintf_s(url, "http://%s:%s/api/", g_ServerHost, g_ServerPort);
+	const int size = 1024 * 20;
+	int ret;
+	char *buf, *p;
+
+	buf = (char *)malloc(size);
+	if (!buf) {
+		return FALSE;
+	}
+
+	p = buf;
+	strcpy_s(p, size, "/api/");
 	if (service_split == 1) {
-		strcat_s(url, "services");
+		strcat_s(p, size, "services");
 	}
 	else {
-		strcat_s(url, "channels");
+		strcat_s(p, size, "channels");
 	}
-	HttpResponse response = client.get(url);
 
-	picojson::value v;
-	std::string err = picojson::parse(v, response.content);
-	if (err.empty()) {
+	while (1) {
+		if (!sendURL(p)) {
+			break;
+		}
+
+		ret = recv(m_sock, p, size - 1, 0);
+		closesocket(m_sock);
+		if (ret < 1) {
+			break;
+		}
+
+		*(p + ret) = '\0';
+		p = strstr(p, "[{");
+		if (!p) {
+			break;
+		}
+
+		picojson::value v;
+		std::string err = picojson::parse(v, p);
+		if (!err.empty()) {
+			break;
+		}
 		*channel_json = v;
 
-		/*
-		// DEBUG
-		picojson::array channel_array = v.get<picojson::array>();
-		for (picojson::array::iterator it = channel_array.begin(); it != channel_array.end(); it++) {
-			picojson::object& channel = it->get<picojson::object>();
-			std::string channel_name = channel["name"].get<std::string>();
-			picojson::array& services = channel["services"].get<picojson::array>();
+		free(buf);
 
-			std::string tmp_debug("channel name : ");
-			tmp_debug.append(channel_name);
-			wchar_t debug[128];
-			mbstowcs(debug, tmp_debug.c_str(), sizeof(debug));
-			OutputDebugString(debug);
-		}
-		*/
+		return TRUE;
 	}
+
+	free(buf);
+
+	return FALSE;
+}
+
+BOOL CBonTuner::sendURL(char* url)
+{
+	char serverRequest[256];
+	sprintf_s(serverRequest, "GET %s HTTP/1.1\r\nX-Mirakurun-Priority: %d\r\n\r\n", url, g_Priority);
+
+	struct addrinfo* ai;
+
+	EnterCriticalSection(&m_CriticalSection);
+	if (m_sock != INVALID_SOCKET) {
+		closesocket(m_sock);
+		m_sock = INVALID_SOCKET;
+	}
+
+	for (ai = m_res; ai; ai = ai->ai_next) {
+		m_sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+		if (m_sock == INVALID_SOCKET) {
+			continue;
+		}
+
+		if (connect(m_sock, ai->ai_addr, (int)ai->ai_addrlen) >= 0) {
+			// OK
+			break;
+		}
+		closesocket(m_sock);
+		m_sock = INVALID_SOCKET;
+	}
+	LeaveCriticalSection(&m_CriticalSection);
+
+	if (m_sock == INVALID_SOCKET) {
+		TCHAR szDebugOut[128];
+		::wsprintf(szDebugOut, TEXT("%s: connection error %d\n"), TUNER_NAME, WSAGetLastError());
+		::OutputDebugString(szDebugOut);
+		return FALSE;
+	}
+
+	if (send(m_sock, serverRequest, (int)strlen(serverRequest), 0) < 0) {
+		closesocket(m_sock);
+		TCHAR szDebugOut[128];
+		::wsprintf(szDebugOut, TEXT("%s: send error %d\n"), TUNER_NAME, WSAGetLastError());
+		::OutputDebugString(szDebugOut);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
+{
+	CBonTuner *pThis = (CBonTuner *)pParam;
+	int len = 0;
+
+	// ドライバにTSデータリクエストを発行する
+	while (1) {
+		if (::WaitForSingleObject(pThis->m_hStopEvent, 0) != WAIT_TIMEOUT) {
+			//中止
+			break;
+		}
+		::EnterCriticalSection(&pThis->m_CriticalSection);
+		if (pThis->m_sock != INVALID_SOCKET) {
+			len = recv(pThis->m_sock, (char *)pThis->m_pSrc, DATA_BUFF_SIZE, 0);
+		}
+		::LeaveCriticalSection(&pThis->m_CriticalSection);
+		if (len > 0) {
+			pThis->m_pGrabTsData->put_TsStream(pThis->m_pSrc, len);
+			len = 0;
+		}
+		else {
+			::Sleep(5);
+		}
+	}
+
+	return 0;
 }

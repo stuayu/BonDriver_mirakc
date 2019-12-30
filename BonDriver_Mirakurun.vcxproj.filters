@@ -4,6 +4,9 @@
     <ClCompile Include="BonDriver_Mirakurun.cpp">
       <Filter>ソースファイル</Filter>
     </ClCompile>
+    <ClCompile Include="GrabTsData.cpp">
+      <Filter>ソースファイル</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="IBonDriver.h">
@@ -16,6 +19,9 @@
       <Filter>ヘッダファイル</Filter>
     </ClInclude>
     <ClInclude Include="picojson\picojson.h">
+      <Filter>ヘッダファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="GrabTsData.h">
       <Filter>ヘッダファイル</Filter>
     </ClInclude>
     <ClInclude Include="binzume\http.h">
