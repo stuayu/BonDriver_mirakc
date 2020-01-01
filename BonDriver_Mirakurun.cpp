@@ -1,14 +1,6 @@
 ﻿#include "BonDriver_Mirakurun.h"
 
 //////////////////////////////////////////////////////////////////////
-// 定数定義
-//////////////////////////////////////////////////////////////////////
-
-// ミューテックス名
-#define MUTEX_NAME TEXT(TUNER_NAME)
-
-
-//////////////////////////////////////////////////////////////////////
 // DLLMain
 //////////////////////////////////////////////////////////////////////
 
@@ -41,10 +33,12 @@ static int Init(HMODULE hModule)
 	wchar_t drive[_MAX_DRIVE];
 	wchar_t dir[_MAX_DIR];
 	wchar_t fname[_MAX_FNAME];
-	_wsplitpath_s(g_IniFilePath, drive, sizeof(drive), dir, sizeof(dir), fname, sizeof(fname), NULL, NULL);
+	_wsplitpath_s(g_IniFilePath,
+		drive, _MAX_DRIVE, dir, _MAX_DIR, fname, _MAX_FNAME, NULL, NULL);
 	wsprintf(g_IniFilePath, L"%s%s%s.ini\0", drive, dir, fname);
 
-	HANDLE hFile = CreateFile(g_IniFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hFile = CreateFile(g_IniFilePath, GENERIC_READ, FILE_SHARE_READ, NULL,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE) {
 		return -2;
 	}
@@ -52,16 +46,19 @@ static int Init(HMODULE hModule)
 	size_t ret;
 
 	wchar_t tmpServerHost[MAX_HOST_LEN];
-	GetPrivateProfileString(L"GLOBAL", L"SERVER_HOST", L"localhost", tmpServerHost, sizeof(tmpServerHost), g_IniFilePath);
+	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost", tmpServerHost,
+		MAX_HOST_LEN, g_IniFilePath);
 	wcstombs_s(&ret, g_ServerHost, tmpServerHost, sizeof(g_ServerHost));
 
 	wchar_t tmpServerPort[MAX_PORT_LEN];
-	GetPrivateProfileString(L"GLOBAL", L"SERVER_PORT", L"8888", tmpServerPort, sizeof(tmpServerPort), g_IniFilePath);
+	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_PORT", L"8888", tmpServerPort,
+		MAX_PORT_LEN, g_IniFilePath);
 	wcstombs_s(&ret, g_ServerPort, tmpServerPort, sizeof(g_ServerPort));
 
 	g_DecodeB25 = GetPrivateProfileInt(L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
 	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
-	g_Service_Split = GetPrivateProfileInt(L"GLOBAL", L"SERVICE_SPLIT", 0, g_IniFilePath);
+	g_Service_Split = GetPrivateProfileInt(
+		L"GLOBAL", L"SERVICE_SPLIT", 0, g_IniFilePath);
 
 	return 0;
 }
@@ -87,16 +84,17 @@ CBonTuner * CBonTuner::m_pThis = NULL;
 HINSTANCE CBonTuner::m_hModule = NULL;
 
 CBonTuner::CBonTuner()
-	: m_bTunerOpen(FALSE)
+	: m_pGrabTsData(NULL)
+	, m_bWinsock(FALSE)
 	, m_hMutex(NULL)
-	, m_hRecvThread(NULL)
 	, m_hOnStreamEvent(NULL)
 	, m_hStopEvent(NULL)
 	, m_dwCurSpace(0UL)
 	, m_dwCurChannel(0xFFFFFFFFUL)
 	, m_res(NULL)
 	, m_sock(INVALID_SOCKET)
-	, m_pGrabTsData(NULL)
+	, m_hRecvThread(NULL)
+	, m_pSrc("")
 {
 	m_pThis = this;
 
@@ -146,9 +144,16 @@ CBonTuner::~CBonTuner()
 const BOOL CBonTuner::OpenTuner()
 {
 	// ミューテックス作成
-	m_hMutex = ::CreateMutex(NULL, TRUE, MUTEX_NAME);
+	m_hMutex = ::CreateMutexA(NULL, TRUE, TUNER_NAME);
 
 	while (1) {
+		// Winsock初期化
+		WSADATA stWsa;
+		if (WSAStartup(MAKEWORD(2, 2), &stWsa) != 0) {
+			break;
+		}
+		m_bWinsock = TRUE;
+
 		// ホスト名解決
 		struct addrinfo hints;
 		memset(&hints, 0, sizeof(hints));
@@ -160,13 +165,6 @@ const BOOL CBonTuner::OpenTuner()
 			break;
 		}
 
-		// Winsock初期化
-		WSADATA stWsa;
-		if (WSAStartup(MAKEWORD(2, 2), &stWsa) != 0) {
-			break;
-		}
-		m_bTunerOpen = TRUE;
-
 		//Initialize channel
 		if (!InitChannel()) {
 			break;
@@ -177,7 +175,8 @@ const BOOL CBonTuner::OpenTuner()
 		m_hStopEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
 
 		// スレッド起動
-		m_hRecvThread = (HANDLE)_beginthreadex(NULL, 0, CBonTuner::RecvThread, (LPVOID)this, 0, NULL);
+		m_hRecvThread = (HANDLE)_beginthreadex(NULL, 0, CBonTuner::RecvThread,
+			(LPVOID)this, 0, NULL);
 		if (!m_hRecvThread) {
 			break;
 		}
@@ -195,13 +194,14 @@ void CBonTuner::CloseTuner()
 	// スレッド終了
 	::SetEvent(m_hStopEvent);
 	if (m_hRecvThread) {
-		if (::WaitForSingleObject(m_hRecvThread, 5000) != WAIT_TIMEOUT) {
+		if (::WaitForSingleObject(m_hRecvThread, 10000) != WAIT_TIMEOUT) {
 			// スレッド強制終了
 			::TerminateThread(m_hRecvThread, 0xffffffff);
 
-			TCHAR szDebugOut[128];
-			::wsprintf(szDebugOut, TEXT("%s: CBonTuner::CloseTuner() ::TerminateThread(m_hRecvThread)\n"), TUNER_NAME);
-			::OutputDebugString(szDebugOut);
+			char szDebugOut[128];
+			sprintf_s(szDebugOut,
+				"%s: CBonTuner::CloseTuner() ::TerminateThread\n", TUNER_NAME);
+			::OutputDebugStringA(szDebugOut);
 		}
 
 		::CloseHandle(m_hRecvThread);
@@ -224,15 +224,15 @@ void CBonTuner::CloseTuner()
 		m_sock = INVALID_SOCKET;
 	}
 
-	// Winsock終了
-	if (m_bTunerOpen) {
-		WSACleanup();
-		m_bTunerOpen = FALSE;
-	}
-
 	if (m_res) {
 		freeaddrinfo(m_res);
 		m_res = NULL;
+	}
+
+	// Winsock終了
+	if (m_bWinsock) {
+		WSACleanup();
+		m_bWinsock = FALSE;
 	}
 
 	// チャンネル初期化
@@ -255,7 +255,8 @@ const DWORD CBonTuner::WaitTsStream(const DWORD dwTimeOut)
 	}
 
 	// イベントがシグナル状態になるのを待つ
-	const DWORD dwRet = ::WaitForSingleObject(m_hOnStreamEvent, (dwTimeOut)? dwTimeOut : INFINITE);
+	const DWORD dwRet = ::WaitForSingleObject(m_hOnStreamEvent,
+		(dwTimeOut) ? dwTimeOut : INFINITE);
 
 	switch (dwRet) {
 		case WAIT_ABANDONED :
@@ -301,7 +302,7 @@ const BOOL CBonTuner::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain)
 
 const BOOL CBonTuner::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain)
 {
-	if ((!m_bTunerOpen) || (!m_pGrabTsData) ||
+	if ((!m_bWinsock) || (!m_pGrabTsData) ||
 		(m_dwCurChannel == 0xFFFFFFFFUL))
 		return FALSE;
 
@@ -310,7 +311,7 @@ const BOOL CBonTuner::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain
 
 void CBonTuner::PurgeTsStream()
 {
-	if (m_bTunerOpen && m_pGrabTsData)
+	if (m_bWinsock && m_pGrabTsData)
 		m_pGrabTsData->purge_TsStream();
 }
 
@@ -329,7 +330,7 @@ LPCTSTR CBonTuner::GetTunerName(void)
 const BOOL CBonTuner::IsTunerOpening(void)
 {
 	// チューナの使用中の有無を返す(全プロセスを通して)
-	HANDLE hMutex = ::OpenMutex(MUTEX_ALL_ACCESS, FALSE, MUTEX_NAME);
+	HANDLE hMutex = ::OpenMutexA(MUTEX_ALL_ACCESS, FALSE, TUNER_NAME);
 
 	if (hMutex) {
 		// 既にチューナは開かれている
@@ -349,7 +350,7 @@ LPCTSTR CBonTuner::EnumTuningSpace(const DWORD dwSpace)
 
 	// 使用可能なチューニング空間を返す
 	static TCHAR buf[128];
-	::MultiByteToWideChar(CP_UTF8, 0, g_pType[dwSpace], -1, buf, sizeof(buf));
+	::MultiByteToWideChar(CP_UTF8, 0, g_pType[dwSpace], -1, buf, sizeof(buf) / 2);
 	return buf;
 }
 
@@ -369,11 +370,12 @@ LPCTSTR CBonTuner::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 		return NULL;
 	}
 
-	picojson::object& channel_obj = g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
-	const char *channel_name = channel_obj["name"].get<std::string>().c_str();
+	picojson::object& channel_obj =
+		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
 	static TCHAR buf[128];
-	::MultiByteToWideChar(CP_UTF8, 0, channel_name, -1, buf, sizeof(buf));
+	::MultiByteToWideChar(CP_UTF8, 0,
+		channel_obj["name"].get<std::string>().c_str(), -1, buf, 128);
 
 	return buf;
 }
@@ -408,25 +410,18 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 		return FALSE;
 	}
 
-	picojson::object& channel_obj = g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
-
-	const char *type;
-	const char *channel;
-	char id[11];
-	if (g_Service_Split == 1) {
-		sprintf_s(id, "%u", (DWORD)channel_obj["id"].get<double>());
-	}
-	else {
-		type = channel_obj["type"].get<std::string>().c_str();
-		channel = channel_obj["channel"].get<std::string>().c_str();
-	}
+	picojson::object& channel_obj =
+		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
 	// Server request
 	char url[128];
 	if (g_Service_Split == 1) {
-		sprintf_s(url, "/api/services/%s/stream?decode=%d", id, g_DecodeB25);
+		const DWORD id = (DWORD)channel_obj["id"].get<double>();
+		sprintf_s(url, "/api/services/%lu/stream?decode=%d", id, g_DecodeB25);
 	}
 	else {
+		const char *type = channel_obj["type"].get<std::string>().c_str();
+		const char *channel = channel_obj["channel"].get<std::string>().c_str();
 		sprintf_s(url, "/api/channels/%s/%s/stream?decode=%d", type, channel, g_DecodeB25);
 	}
 	if (!sendURL(url)) {
@@ -473,10 +468,12 @@ BOOL CBonTuner::InitChannel()
 		if (!g_Channel_JSON.contains(i)) {
 			break;
 		}
-		picojson::object& channel_obj = g_Channel_JSON.get(i).get<picojson::object>();
-		const char* type;
+		picojson::object& channel_obj =
+			g_Channel_JSON.get(i).get<picojson::object>();
+		const char *type;
 		if (g_Service_Split == 1) {
-			picojson::object& channel_detail = channel_obj["channel"].get<picojson::object>();
+			picojson::object& channel_detail =
+				channel_obj["channel"].get<picojson::object>();
 			type = channel_detail["type"].get<std::string>().c_str();
 		}
 		else {
@@ -484,7 +481,7 @@ BOOL CBonTuner::InitChannel()
 		}
 		if (!g_pType[0]) {
 			int len = (int)strlen(type) + 1;
-			g_pType[0] = (char*)malloc(len);
+			g_pType[0] = (char *)malloc(len);
 			if (!g_pType[0]) {
 				break;
 			}
@@ -492,7 +489,7 @@ BOOL CBonTuner::InitChannel()
 		}
 		else if (strcmp(g_pType[j], type)) {
 			int len = (int)strlen(type) + 1;
-			g_pType[++j] = (char*)malloc(len);
+			g_pType[++j] = (char *)malloc(len);
 			if (!g_pType[j]) {
 				j--;
 				break;
@@ -509,37 +506,36 @@ BOOL CBonTuner::InitChannel()
 
 BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 {
-	const int size = 1024 * 20;
-	int ret;
-	char *buf, *p;
+	const int len = 1024 * 20;
+	char *buf;
 
-	buf = (char *)malloc(size);
+	buf = (char *)malloc(len);
 	if (!buf) {
 		return FALSE;
 	}
 
-	p = buf;
-	strcpy_s(p, size, "/api/");
+	strcpy_s(buf, len, "/api/");
 	if (service_split == 1) {
-		strcat_s(p, size, "services");
+		strcat_s(buf, len, "services");
 	}
 	else {
-		strcat_s(p, size, "channels");
+		strcat_s(buf, len, "channels");
 	}
 
 	while (1) {
-		if (!sendURL(p)) {
+		if (!sendURL(buf)) {
 			break;
 		}
 
-		ret = recv(m_sock, p, size - 1, 0);
+		int ret;
+		ret = recv(m_sock, buf, len - 1, 0);
 		closesocket(m_sock);
 		if (ret < 1) {
 			break;
 		}
+		*(buf + ret) = '\0';
 
-		*(p + ret) = '\0';
-		p = strstr(p, "[{");
+		char *p = strstr(buf, "[{");
 		if (!p) {
 			break;
 		}
@@ -561,12 +557,9 @@ BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 	return FALSE;
 }
 
-BOOL CBonTuner::sendURL(char* url)
+BOOL CBonTuner::sendURL(char *url)
 {
-	char serverRequest[256];
-	sprintf_s(serverRequest, "GET %s HTTP/1.1\r\nX-Mirakurun-Priority: %d\r\n\r\n", url, g_Priority);
-
-	struct addrinfo* ai;
+	struct addrinfo *ai;
 
 	EnterCriticalSection(&m_CriticalSection);
 	if (m_sock != INVALID_SOCKET) {
@@ -590,17 +583,21 @@ BOOL CBonTuner::sendURL(char* url)
 	LeaveCriticalSection(&m_CriticalSection);
 
 	if (m_sock == INVALID_SOCKET) {
-		TCHAR szDebugOut[128];
-		::wsprintf(szDebugOut, TEXT("%s: connection error %d\n"), TUNER_NAME, WSAGetLastError());
-		::OutputDebugString(szDebugOut);
+		char szDebugOut[128];
+		sprintf_s(szDebugOut,
+			"%s: connection error %d\n", TUNER_NAME, WSAGetLastError());
+		::OutputDebugStringA(szDebugOut);
 		return FALSE;
 	}
 
+	char serverRequest[256];
+	sprintf_s(serverRequest,
+		"GET %s HTTP/1.1\r\nX-Mirakurun-Priority: %d\r\n\r\n", url, g_Priority);
 	if (send(m_sock, serverRequest, (int)strlen(serverRequest), 0) < 0) {
 		closesocket(m_sock);
-		TCHAR szDebugOut[128];
-		::wsprintf(szDebugOut, TEXT("%s: send error %d\n"), TUNER_NAME, WSAGetLastError());
-		::OutputDebugString(szDebugOut);
+		char szDebugOut[128];
+		sprintf_s(szDebugOut, "%s: send error %d\n", TUNER_NAME, WSAGetLastError());
+		::OutputDebugStringA(szDebugOut);
 		return FALSE;
 	}
 
@@ -612,7 +609,6 @@ UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
 	CBonTuner *pThis = (CBonTuner *)pParam;
 	int len = 0;
 
-	// ドライバにTSデータリクエストを発行する
 	while (1) {
 		if (::WaitForSingleObject(pThis->m_hStopEvent, 0) != WAIT_TIMEOUT) {
 			//中止
@@ -620,15 +616,12 @@ UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
 		}
 		::EnterCriticalSection(&pThis->m_CriticalSection);
 		if (pThis->m_sock != INVALID_SOCKET) {
-			len = recv(pThis->m_sock, (char *)pThis->m_pSrc, DATA_BUFF_SIZE, 0);
+			len = recv(pThis->m_sock, (char *)pThis->m_pSrc, DATA_BUF_SIZE, 0);
 		}
 		::LeaveCriticalSection(&pThis->m_CriticalSection);
 		if (len > 0) {
 			pThis->m_pGrabTsData->put_TsStream(pThis->m_pSrc, len);
 			len = 0;
-		}
-		else {
-			::Sleep(5);
 		}
 	}
 

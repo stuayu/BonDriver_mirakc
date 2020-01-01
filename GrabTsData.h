@@ -9,8 +9,8 @@
 
 // TS data buffer size
 //
-#define DATA_BUFF_SIZE (188 * 256)
-#define RING_BUFF_SIZE (DATA_BUFF_SIZE * 512) // > 24Mbps / 8bit * 5sec
+#define DATA_BUF_SIZE (188 * 256)
+#define RING_BUF_SIZE (DATA_BUF_SIZE * 512) // > 24Mbps / 8bit * 5sec
 
 // GrabTsData class
 //
@@ -25,10 +25,14 @@ public:
 		std::atomic_init(&m_nPush, 0);
 		std::atomic_init(&m_nPull, 0);
 		std::atomic_init(&m_nAccumData, 0);
+		m_pBuf = (BYTE *)malloc(RING_BUF_SIZE);
+		m_pDst = (BYTE*)malloc(DATA_BUF_SIZE);
 	}
 	// Destructor
 	~GrabTsData()
 	{
+		free(m_pDst);
+		free(m_pBuf);
 	}
 	// Private interface for TS stream
 	BOOL put_TsStream(BYTE *pSrc, DWORD dwSize);
@@ -45,8 +49,8 @@ private:
 	// TS data buffer ( simple ring buffer )
 	std::atomic_ulong m_nPush;
 	std::atomic_ulong m_nPull;
-	BYTE m_ayBuf[RING_BUFF_SIZE];
-	BYTE m_pDst[DATA_BUFF_SIZE];
+	BYTE *m_pBuf;
+	BYTE *m_pDst;
 	// Bitrate calculation
 	std::atomic_long m_nAccumData;
 };

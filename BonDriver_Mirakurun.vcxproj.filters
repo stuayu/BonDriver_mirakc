@@ -24,12 +24,6 @@
     <ClInclude Include="GrabTsData.h">
       <Filter>ヘッダファイル</Filter>
     </ClInclude>
-    <ClInclude Include="binzume\http.h">
-      <Filter>ヘッダファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="binzume\socket.h">
-      <Filter>ヘッダファイル</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="ソースファイル">

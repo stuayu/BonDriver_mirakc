@@ -1,12 +1,11 @@
-﻿#define _WINSOCK_DEPRECATED_NO_WARNINGS
-
-#include <process.h>
+﻿#include <process.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "IBonDriver2.h"
-#include "binzume\http.h"
 #include "GrabTsData.h"
 #include "picojson\picojson.h"
+
+#pragma comment(lib, "ws2_32.lib")
 
 #if !defined(_BONTUNER_H_)
 #define _BONTUNER_H_
@@ -20,8 +19,8 @@
 
 static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };
 
-#define MAX_HOST_LEN	256
-#define MAX_PORT_LEN	8
+#define MAX_HOST_LEN 256
+#define MAX_PORT_LEN 8
 static char g_ServerHost[MAX_HOST_LEN];
 static char g_ServerPort[MAX_PORT_LEN];
 static int g_DecodeB25;
@@ -29,7 +28,7 @@ static int g_Priority;
 static int g_Service_Split;
 
 #define SPACE_NUM 8
-static char* g_pType[SPACE_NUM];
+static char *g_pType[SPACE_NUM];
 static DWORD g_Max_Type;
 static DWORD g_Channel_Base[SPACE_NUM];
 picojson::value g_Channel_JSON;
@@ -57,7 +56,7 @@ public:
 
 	void PurgeTsStream(void);
 
-// IBonDriver2(暫定)
+	// IBonDriver2(暫定)
 	LPCTSTR GetTunerName(void);
 
 	const BOOL IsTunerOpening(void);
@@ -87,14 +86,14 @@ protected:
 
 	struct addrinfo *m_res;
 	SOCKET m_sock;
-	bool m_bTunerOpen;
-	BYTE m_pSrc[DATA_BUFF_SIZE];
+	bool m_bWinsock;
+	BYTE m_pSrc[DATA_BUF_SIZE];
 
 	GrabTsData* m_pGrabTsData;
 
 	BOOL InitChannel(void);
-	BOOL GetApiChannels(picojson::value* json_array, int service_split);
-	BOOL sendURL(char* url);
+	BOOL GetApiChannels(picojson::value *json_array, int service_split);
+	BOOL sendURL(char *url);
 	static UINT WINAPI RecvThread(LPVOID pParam);
 };
 

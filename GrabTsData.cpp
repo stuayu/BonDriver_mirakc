@@ -21,17 +21,17 @@ BOOL GrabTsData::put_TsStream(BYTE *pSrc, DWORD dwSize)
 	nPush = std::atomic_load(&m_nPush);
 	nPull = std::atomic_load(&m_nPull);
 	// copy TS data to the ring buffer
-	DWORD nTail = RING_BUFF_SIZE - nPush; // size between the current position and the buffer end
-	DWORD nData = (RING_BUFF_SIZE + nPush - nPull) % RING_BUFF_SIZE; // size of TS data stored
-	nData = RING_BUFF_SIZE - nData - 1; // size of available buffer (empty buffer - 1)
+	DWORD nTail = RING_BUF_SIZE - nPush; // size between the current position and the buffer end
+	DWORD nData = (RING_BUF_SIZE + nPush - nPull) % RING_BUF_SIZE; // size of TS data stored
+	nData = RING_BUF_SIZE - nData - 1; // size of available buffer (empty buffer - 1)
 	nData = min(nData, dwSize);
 	if (nData < nTail) {
-		CopyMemory(m_ayBuf + nPush, pSrc, nData);
+		CopyMemory(m_pBuf + nPush, pSrc, nData);
 		nPush += nData;
 	}
 	else {
-		CopyMemory(m_ayBuf + m_nPush, pSrc, nTail);
-		CopyMemory(m_ayBuf, pSrc + nTail, nData - nTail);
+		CopyMemory(m_pBuf + m_nPush, pSrc, nTail);
+		CopyMemory(m_pBuf, pSrc + nTail, nData - nTail);
 		nPush = nData - nTail;
 	}
 	// update the push position
@@ -61,17 +61,17 @@ BOOL GrabTsData::get_TsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain)
 	nPush = std::atomic_load(&m_nPush);
 	nPull = std::atomic_load(&m_nPull);
 	// copy TS data to the destination buffer
-	DWORD nTail = RING_BUFF_SIZE - nPull; // size between the current position and the buffer end
-	DWORD nData = (RING_BUFF_SIZE + nPush - nPull) % RING_BUFF_SIZE; // size of TS data stored
+	DWORD nTail = RING_BUF_SIZE - nPull; // size between the current position and the buffer end
+	DWORD nData = (RING_BUF_SIZE + nPush - nPull) % RING_BUF_SIZE; // size of TS data stored
 	DWORD nRemain = nData;
 	if (nData > 0) {
-		nData = min(nData, DATA_BUFF_SIZE);
+		nData = min(nData, DATA_BUF_SIZE);
 		if (nData < nTail) {
-			CopyMemory(m_pDst, m_ayBuf + nPull, nData);
+			CopyMemory(m_pDst, m_pBuf + nPull, nData);
 			nPull += nData;
 		} else {
-			CopyMemory(m_pDst, m_ayBuf + nPull, nTail);
-			CopyMemory(m_pDst + nTail, m_ayBuf, nData - nTail);
+			CopyMemory(m_pDst, m_pBuf + nPull, nTail);
+			CopyMemory(m_pDst + nTail, m_pBuf, nData - nTail);
 			nPull = nData - nTail;
 		}
 		nRemain -= nData;
@@ -83,7 +83,7 @@ BOOL GrabTsData::get_TsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain)
 	*ppDst = m_pDst;
 	*pdwSize = nData;
 	if (pdwRemain) {
-		*pdwRemain = CEIL(nRemain, DATA_BUFF_SIZE);
+		*pdwRemain = CEIL(nRemain, DATA_BUF_SIZE);
 	}
 
 	return TRUE;
@@ -106,7 +106,7 @@ BOOL GrabTsData::get_ReadyCount(DWORD *pdwRemain)
 		DWORD nPush, nPull;
 		nPush = std::atomic_load(&m_nPush);
 		nPull = std::atomic_load(&m_nPull);
-		*pdwRemain = CEIL((RING_BUFF_SIZE + nPush - nPull) % RING_BUFF_SIZE, DATA_BUFF_SIZE);
+		*pdwRemain = CEIL((RING_BUF_SIZE + nPush - nPull) % RING_BUF_SIZE, DATA_BUF_SIZE);
 	}
 
 	return TRUE;
@@ -117,9 +117,9 @@ BOOL GrabTsData::get_ReadyCount(DWORD *pdwRemain)
 BOOL GrabTsData::get_Bitrate(float *pfBitrate)
 {
 	static double dBitrate = 0;
-	static DWORD dwLastTime = GetTickCount();
-	DWORD dwNow = GetTickCount(); // ms
-	DWORD dwDuration = dwNow - dwLastTime;
+	static ULONGLONG dwLastTime = GetTickCount64();
+	ULONGLONG dwNow = GetTickCount64(); // ms
+	ULONGLONG dwDuration = dwNow - dwLastTime;
 
 	if (dwDuration >= 1000) {
 		dBitrate = std::atomic_exchange(&m_nAccumData, 0) / dwDuration * 8 * 1000 / 1024 / 1024.0; // Mbps
