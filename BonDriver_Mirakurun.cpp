@@ -349,8 +349,9 @@ LPCTSTR CBonTuner::EnumTuningSpace(const DWORD dwSpace)
 	}
 
 	// 使用可能なチューニング空間を返す
-	static TCHAR buf[128];
-	::MultiByteToWideChar(CP_UTF8, 0, g_pType[dwSpace], -1, buf, sizeof(buf) / 2);
+	const int len = 8;
+	static TCHAR buf[len];
+	::MultiByteToWideChar(CP_UTF8, 0, g_pType[dwSpace], -1, buf, len);
 	return buf;
 }
 
@@ -373,9 +374,10 @@ LPCTSTR CBonTuner::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 	picojson::object& channel_obj =
 		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
-	static TCHAR buf[128];
+	const int len = 128;
+	static TCHAR buf[len];
 	::MultiByteToWideChar(CP_UTF8, 0,
-		channel_obj["name"].get<std::string>().c_str(), -1, buf, 128);
+		channel_obj["name"].get<std::string>().c_str(), -1, buf, len);
 
 	return buf;
 }
@@ -416,8 +418,8 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 	// Server request
 	char url[128];
 	if (g_Service_Split == 1) {
-		const DWORD id = (DWORD)channel_obj["id"].get<double>();
-		sprintf_s(url, "/api/services/%lu/stream?decode=%d", id, g_DecodeB25);
+		const __int64 id = (__int64)channel_obj["id"].get<double>();
+		sprintf_s(url, "/api/services/%lld/stream?decode=%d", id, g_DecodeB25);
 	}
 	else {
 		const char *type = channel_obj["type"].get<std::string>().c_str();
