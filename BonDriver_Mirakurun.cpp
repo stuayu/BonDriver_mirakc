@@ -508,7 +508,7 @@ BOOL CBonTuner::InitChannel()
 
 BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 {
-	const int len = 1024 * 20;
+	const int len = 1024 * 32;
 	char *buf;
 
 	buf = (char *)malloc(len);
