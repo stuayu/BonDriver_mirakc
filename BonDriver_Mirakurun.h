@@ -81,15 +81,15 @@ protected:
 	HANDLE m_hStopEvent;
 	HANDLE m_hRecvThread;
 
-	DWORD m_dwCurSpace;
-	DWORD m_dwCurChannel;
+	GrabTsData *m_pGrabTsData;
 
+	BYTE *m_pSrc;
+	bool m_bWinsock;
 	struct addrinfo *m_res;
 	SOCKET m_sock;
-	bool m_bWinsock;
-	BYTE m_pSrc[DATA_BUF_SIZE];
 
-	GrabTsData* m_pGrabTsData;
+	DWORD m_dwCurSpace;
+	DWORD m_dwCurChannel;
 
 	BOOL InitChannel(void);
 	BOOL GetApiChannels(picojson::value *json_array, int service_split);

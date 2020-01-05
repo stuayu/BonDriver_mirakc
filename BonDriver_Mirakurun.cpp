@@ -84,17 +84,17 @@ CBonTuner * CBonTuner::m_pThis = NULL;
 HINSTANCE CBonTuner::m_hModule = NULL;
 
 CBonTuner::CBonTuner()
-	: m_pGrabTsData(NULL)
-	, m_bWinsock(FALSE)
-	, m_hMutex(NULL)
+	: m_hMutex(NULL)
 	, m_hOnStreamEvent(NULL)
 	, m_hStopEvent(NULL)
-	, m_dwCurSpace(0UL)
-	, m_dwCurChannel(0xFFFFFFFFUL)
+	, m_hRecvThread(NULL)
+	, m_pGrabTsData(NULL)
+	, m_pSrc(NULL)
+	, m_bWinsock(FALSE)
 	, m_res(NULL)
 	, m_sock(INVALID_SOCKET)
-	, m_hRecvThread(NULL)
-	, m_pSrc("")
+	, m_dwCurSpace(0xffffffff)
+	, m_dwCurChannel(0xffffffff)
 {
 	m_pThis = this;
 
@@ -147,6 +147,12 @@ const BOOL CBonTuner::OpenTuner()
 	m_hMutex = ::CreateMutexA(NULL, TRUE, TUNER_NAME);
 
 	while (1) {
+		// TSバッファー確保
+		m_pSrc = (BYTE *)malloc(DATA_BUF_SIZE);
+		if (!m_pSrc) {
+			break;
+		}
+
 		// Winsock初期化
 		WSADATA stWsa;
 		if (WSAStartup(MAKEWORD(2, 2), &stWsa) != 0) {
@@ -191,6 +197,10 @@ const BOOL CBonTuner::OpenTuner()
 
 void CBonTuner::CloseTuner()
 {
+	// チャンネル初期化
+	m_dwCurSpace = 0xffffffff;
+	m_dwCurChannel = 0xffffffff;
+
 	// スレッド終了
 	::SetEvent(m_hStopEvent);
 	if (m_hRecvThread) {
@@ -235,9 +245,11 @@ void CBonTuner::CloseTuner()
 		m_bWinsock = FALSE;
 	}
 
-	// チャンネル初期化
-	m_dwCurSpace = 0UL;
-	m_dwCurChannel = 0xFFFFFFFFUL;
+	// TSバッファー開放
+	if (m_pSrc) {
+		free(m_pSrc);
+		m_pSrc = NULL;
+	}
 
 	// ミューテックス開放
 	if (m_hMutex) {
@@ -278,8 +290,9 @@ const DWORD CBonTuner::WaitTsStream(const DWORD dwTimeOut)
 const DWORD CBonTuner::GetReadyCount()
 {
 	DWORD dwCount = 0;
-	if (m_pGrabTsData)
+	if (m_pGrabTsData) {
 		m_pGrabTsData->get_ReadyCount(&dwCount);
+	}
 
 	return dwCount;
 }
@@ -302,17 +315,18 @@ const BOOL CBonTuner::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain)
 
 const BOOL CBonTuner::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain)
 {
-	if ((!m_bWinsock) || (!m_pGrabTsData) ||
-		(m_dwCurChannel == 0xFFFFFFFFUL))
+	if (!m_pGrabTsData || m_dwCurChannel == 0xffffffff) {
 		return FALSE;
+	}
 
 	return m_pGrabTsData->get_TsStream(ppDst, pdwSize, pdwRemain);
 }
 
 void CBonTuner::PurgeTsStream()
 {
-	if (m_bWinsock && m_pGrabTsData)
+	if (m_pGrabTsData) {
 		m_pGrabTsData->purge_TsStream();
+	}
 }
 
 void CBonTuner::Release()
@@ -418,7 +432,7 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 	// Server request
 	char url[128];
 	if (g_Service_Split == 1) {
-		const __int64 id = (__int64)channel_obj["id"].get<double>();
+		const INT64 id = (INT64)channel_obj["id"].get<double>();
 		sprintf_s(url, "/api/services/%lld/stream?decode=%d", id, g_DecodeB25);
 	}
 	else {
@@ -445,7 +459,7 @@ const float CBonTuner::GetSignalLevel(void)
 {
 	// チャンネル番号不明時は0を返す
 	float fSignalLevel = 0;
-	if (m_dwCurChannel != 0xFFFFFFFFUL && m_pGrabTsData)
+	if (m_dwCurChannel != 0xffffffff && m_pGrabTsData)
 		m_pGrabTsData->get_Bitrate(&fSignalLevel);
 	return fSignalLevel;
 }
@@ -508,7 +522,7 @@ BOOL CBonTuner::InitChannel()
 
 BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 {
-	const int len = 1024 * 32;
+	const int len = 1024 * 64;
 	char *buf;
 
 	buf = (char *)malloc(len);
@@ -561,9 +575,12 @@ BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 
 BOOL CBonTuner::sendURL(char *url)
 {
+	BOOL ret = TRUE;
 	struct addrinfo *ai;
 
 	EnterCriticalSection(&m_CriticalSection);
+
+	// Close opened socket
 	if (m_sock != INVALID_SOCKET) {
 		closesocket(m_sock);
 		m_sock = INVALID_SOCKET;
@@ -582,34 +599,41 @@ BOOL CBonTuner::sendURL(char *url)
 		closesocket(m_sock);
 		m_sock = INVALID_SOCKET;
 	}
-	LeaveCriticalSection(&m_CriticalSection);
 
 	if (m_sock == INVALID_SOCKET) {
 		char szDebugOut[128];
 		sprintf_s(szDebugOut,
 			"%s: connection error %d\n", TUNER_NAME, WSAGetLastError());
 		::OutputDebugStringA(szDebugOut);
-		return FALSE;
+		ret = FALSE;
+	}
+	else {
+		char serverRequest[256];
+		sprintf_s(serverRequest,
+			"GET %s HTTP/1.1\r\nX-Mirakurun-Priority: %d\r\n\r\n", url, g_Priority);
+		if (send(m_sock, serverRequest, (int)strlen(serverRequest), 0) < 0) {
+			closesocket(m_sock);
+			char szDebugOut[128];
+			sprintf_s(szDebugOut,
+				"%s: send error %d\n", TUNER_NAME, WSAGetLastError());
+			::OutputDebugStringA(szDebugOut);
+			ret = FALSE;
+		}
 	}
 
-	char serverRequest[256];
-	sprintf_s(serverRequest,
-		"GET %s HTTP/1.1\r\nX-Mirakurun-Priority: %d\r\n\r\n", url, g_Priority);
-	if (send(m_sock, serverRequest, (int)strlen(serverRequest), 0) < 0) {
-		closesocket(m_sock);
-		char szDebugOut[128];
-		sprintf_s(szDebugOut, "%s: send error %d\n", TUNER_NAME, WSAGetLastError());
-		::OutputDebugStringA(szDebugOut);
-		return FALSE;
-	}
+	LeaveCriticalSection(&m_CriticalSection);
 
-	return TRUE;
+	return ret;
 }
 
 UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
 {
 	CBonTuner *pThis = (CBonTuner *)pParam;
 	int len = 0;
+
+	if (!pThis->m_pSrc) {
+		return 0;
+	}
 
 	while (1) {
 		if (::WaitForSingleObject(pThis->m_hStopEvent, 0) != WAIT_TIMEOUT) {
