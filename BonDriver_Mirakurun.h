@@ -17,6 +17,7 @@
 #define dllimport dllexport
 #define TUNER_NAME "BonDriver_Mirakurun"
 
+static const char g_TunerName[] = TUNER_NAME;
 static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };
 
 #define MAX_HOST_LEN 256
@@ -29,7 +30,7 @@ static int g_Service_Split;
 
 #define SPACE_NUM 8
 static char *g_pType[SPACE_NUM];
-static DWORD g_Max_Type;
+static int g_Max_Type = -1;
 static DWORD g_Channel_Base[SPACE_NUM];
 picojson::value g_Channel_JSON;
 

@@ -43,17 +43,19 @@ static int Init(HMODULE hModule)
 		return -2;
 	}
 	CloseHandle(hFile);
-	size_t ret;
 
+	setlocale(LC_ALL, "ja-JP");
+
+	size_t ret;
 	wchar_t tmpServerHost[MAX_HOST_LEN];
 	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost", tmpServerHost,
 		MAX_HOST_LEN, g_IniFilePath);
-	wcstombs_s(&ret, g_ServerHost, tmpServerHost, sizeof(g_ServerHost));
+	wcstombs_s(&ret, g_ServerHost, MAX_HOST_LEN, tmpServerHost, _TRUNCATE);
 
 	wchar_t tmpServerPort[MAX_PORT_LEN];
 	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_PORT", L"8888", tmpServerPort,
 		MAX_PORT_LEN, g_IniFilePath);
-	wcstombs_s(&ret, g_ServerPort, tmpServerPort, sizeof(g_ServerPort));
+	wcstombs_s(&ret, g_ServerPort, MAX_PORT_LEN, tmpServerPort, _TRUNCATE);
 
 	g_DecodeB25 = GetPrivateProfileInt(L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
 	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
@@ -102,11 +104,6 @@ CBonTuner::CBonTuner()
 
 	// GrabTsDataインスタンス作成
 	m_pGrabTsData = new GrabTsData(&m_hOnStreamEvent);
-
-	// グローバル変数初期化
-	for (int i = 0; i < SPACE_NUM; i++) {
-		g_pType[i] = NULL;
-	}
 }
 
 CBonTuner::~CBonTuner()
@@ -114,28 +111,11 @@ CBonTuner::~CBonTuner()
 	// 開かれてる場合は閉じる
 	CloseTuner();
 
-	// メモリ解放
-	for (int i = 0; i < SPACE_NUM; i++) {
-		if (g_pType[i]) {
-			free(g_pType[i]);
-		}
-		else {
-			break;
-		}
-	}
-
 	// GrabTsDataインスタンス開放
 	if (m_pGrabTsData) {
 		delete m_pGrabTsData;
 	}
 
-	// イベント開放
-	if (m_hStopEvent) {
-		::CloseHandle(m_hStopEvent);
-	}
-	if (m_hOnStreamEvent) {
-		::CloseHandle(m_hOnStreamEvent);
-	}
 	::DeleteCriticalSection(&m_CriticalSection);
 
 	m_pThis = NULL;
@@ -144,7 +124,10 @@ CBonTuner::~CBonTuner()
 const BOOL CBonTuner::OpenTuner()
 {
 	// ミューテックス作成
-	m_hMutex = ::CreateMutexA(NULL, TRUE, TUNER_NAME);
+	m_hMutex = ::CreateMutexA(NULL, TRUE, g_TunerName);
+	if (!m_hMutex) {
+		return FALSE;
+	}
 
 	while (1) {
 		// TSバッファー確保
@@ -172,11 +155,12 @@ const BOOL CBonTuner::OpenTuner()
 		}
 
 		//Initialize channel
+		setlocale(LC_ALL, ".utf-8");
 		if (!InitChannel()) {
 			break;
 		}
 
-		// イベント作成
+		// イベントオブジェクト作成
 		m_hOnStreamEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
 		m_hStopEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
 
@@ -188,10 +172,12 @@ const BOOL CBonTuner::OpenTuner()
 		}
 
 		//return SetChannel(0UL,0UL);
+
 		return TRUE;
 	}
 
 	CloseTuner();
+
 	return FALSE;
 }
 
@@ -202,23 +188,22 @@ void CBonTuner::CloseTuner()
 	m_dwCurChannel = 0xffffffff;
 
 	// スレッド終了
-	::SetEvent(m_hStopEvent);
 	if (m_hRecvThread) {
-		if (::WaitForSingleObject(m_hRecvThread, 10000) != WAIT_TIMEOUT) {
+		::SetEvent(m_hStopEvent);
+		if (::WaitForSingleObject(m_hRecvThread, 10000) == WAIT_TIMEOUT) {
 			// スレッド強制終了
 			::TerminateThread(m_hRecvThread, 0xffffffff);
 
 			char szDebugOut[128];
 			sprintf_s(szDebugOut,
-				"%s: CBonTuner::CloseTuner() ::TerminateThread\n", TUNER_NAME);
+				"%s: CloseTuner() ::TerminateThread\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
 		}
-
 		::CloseHandle(m_hRecvThread);
 		m_hRecvThread = NULL;
 	}
 
-	// イベント開放
+	// イベントオブジェクト開放
 	if (m_hStopEvent) {
 		::CloseHandle(m_hStopEvent);
 		m_hStopEvent = NULL;
@@ -228,12 +213,21 @@ void CBonTuner::CloseTuner()
 		m_hOnStreamEvent = NULL;
 	}
 
+	// チューニング空間解放
+	for (int i = 0; i <= g_Max_Type; i++) {
+		if (g_pType[i]) {
+			free(g_pType[i]);
+		}
+	}
+	g_Max_Type = -1;
+
 	// ソケットクローズ
 	if (m_sock != INVALID_SOCKET) {
 		closesocket(m_sock);
 		m_sock = INVALID_SOCKET;
 	}
 
+	// アドレスリソース開放
 	if (m_res) {
 		freeaddrinfo(m_res);
 		m_res = NULL;
@@ -344,7 +338,7 @@ LPCTSTR CBonTuner::GetTunerName(void)
 const BOOL CBonTuner::IsTunerOpening(void)
 {
 	// チューナの使用中の有無を返す(全プロセスを通して)
-	HANDLE hMutex = ::OpenMutexA(MUTEX_ALL_ACCESS, FALSE, TUNER_NAME);
+	HANDLE hMutex = ::OpenMutexA(MUTEX_ALL_ACCESS, FALSE, g_TunerName);
 
 	if (hMutex) {
 		// 既にチューナは開かれている
@@ -358,23 +352,25 @@ const BOOL CBonTuner::IsTunerOpening(void)
 
 LPCTSTR CBonTuner::EnumTuningSpace(const DWORD dwSpace)
 {
-	if (dwSpace > g_Max_Type) {
+	if (dwSpace > (UINT)g_Max_Type) {
 		return NULL;
 	}
 
 	// 使用可能なチューニング空間を返す
+	size_t ret;
 	const int len = 8;
 	static TCHAR buf[len];
-	::MultiByteToWideChar(CP_UTF8, 0, g_pType[dwSpace], -1, buf, len);
+	mbstowcs_s(&ret, buf, len, g_pType[dwSpace], _TRUNCATE);
+
 	return buf;
 }
 
 LPCTSTR CBonTuner::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 {
-	if (dwSpace > g_Max_Type) {
+	if (dwSpace > (UINT)g_Max_Type) {
 		return NULL;
 	}
-	if (dwSpace < g_Max_Type) {
+	if (dwSpace < (UINT)g_Max_Type) {
 		if (dwChannel >= g_Channel_Base[dwSpace + 1] - g_Channel_Base[dwSpace]) {
 			return NULL;
 		}
@@ -388,10 +384,12 @@ LPCTSTR CBonTuner::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 	picojson::object& channel_obj =
 		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
+	// 使用可能なチャンネル名を返す
+	size_t ret;
 	const int len = 128;
 	static TCHAR buf[len];
-	::MultiByteToWideChar(CP_UTF8, 0,
-		channel_obj["name"].get<std::string>().c_str(), -1, buf, len);
+	mbstowcs_s(&ret, buf, len,
+		channel_obj["name"].get<std::string>().c_str(), _TRUNCATE);
 
 	return buf;
 }
@@ -417,7 +415,7 @@ const BOOL CBonTuner::SetChannel(const BYTE bCh)
 // チャンネル設定
 const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 {
-	if (dwSpace > g_Max_Type) {
+	if (dwSpace > (UINT)g_Max_Type) {
 		return FALSE;
 	}
 
@@ -477,9 +475,9 @@ BOOL CBonTuner::InitChannel()
 		return FALSE;
 	}
 
-	// チューナ空間取得
+	// チューニング空間取得
 	int i = 0;
-	int j = 0;
+	int j = -1;
 	while (j < SPACE_NUM - 1) {
 		if (!g_Channel_JSON.contains(i)) {
 			break;
@@ -495,17 +493,10 @@ BOOL CBonTuner::InitChannel()
 		else {
 			type = channel_obj["type"].get<std::string>().c_str();
 		}
-		if (!g_pType[0]) {
+		if (j < 0 || strcmp(g_pType[j], type)) {
+			j++;
 			int len = (int)strlen(type) + 1;
-			g_pType[0] = (char *)malloc(len);
-			if (!g_pType[0]) {
-				break;
-			}
-			strcpy_s(g_pType[0], len, type);
-		}
-		else if (strcmp(g_pType[j], type)) {
-			int len = (int)strlen(type) + 1;
-			g_pType[++j] = (char *)malloc(len);
+			g_pType[j] = (char *)malloc(len);
 			if (!g_pType[j]) {
 				j--;
 				break;
@@ -514,6 +505,9 @@ BOOL CBonTuner::InitChannel()
 			g_Channel_Base[j] = i;
 		}
 		i++;
+	}
+	if (j < 0) {
+		return FALSE;
 	}
 	g_Max_Type = j;
 
@@ -603,7 +597,7 @@ BOOL CBonTuner::sendURL(char *url)
 	if (m_sock == INVALID_SOCKET) {
 		char szDebugOut[128];
 		sprintf_s(szDebugOut,
-			"%s: connection error %d\n", TUNER_NAME, WSAGetLastError());
+			"%s: connection error %d\n", g_TunerName, WSAGetLastError());
 		::OutputDebugStringA(szDebugOut);
 		ret = FALSE;
 	}
@@ -615,7 +609,7 @@ BOOL CBonTuner::sendURL(char *url)
 			closesocket(m_sock);
 			char szDebugOut[128];
 			sprintf_s(szDebugOut,
-				"%s: send error %d\n", TUNER_NAME, WSAGetLastError());
+				"%s: send error %d\n", g_TunerName, WSAGetLastError());
 			::OutputDebugStringA(szDebugOut);
 			ret = FALSE;
 		}

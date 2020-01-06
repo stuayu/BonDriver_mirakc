@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 // File: GrabTsData.h
+//   Header file of GrabTsData
 //------------------------------------------------------------------------------
-#pragma once
 
 #include <windows.h>
 #include <atomic>
@@ -21,20 +21,24 @@ public:
 	GrabTsData(HANDLE *phOnStreamEvent)
 	{
 		m_phOnStreamEvent = phOnStreamEvent;
+		std::atomic_init(&m_nAccumData, 0);
 		std::atomic_init(&m_bPurge, FALSE);
 		std::atomic_init(&m_nPush, 0);
 		std::atomic_init(&m_nPull, 0);
-		std::atomic_init(&m_nAccumData, 0);
+		m_pDst = (BYTE *)malloc(DATA_BUF_SIZE);
 		m_pBuf = (BYTE *)malloc(RING_BUF_SIZE);
-		m_pDst = (BYTE*)malloc(DATA_BUF_SIZE);
 	}
 	// Destructor
 	~GrabTsData()
 	{
-		free(m_pDst);
-		free(m_pBuf);
+		if (m_pBuf) {
+			free(m_pBuf);
+		}
+		if (m_pDst) {
+			free(m_pDst);
+		}
 	}
-	// Private interface for TS stream
+	// Interfaces
 	BOOL put_TsStream(BYTE *pSrc, DWORD dwSize);
 	BOOL get_TsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain);
 	BOOL purge_TsStream(void);
@@ -42,15 +46,15 @@ public:
 	BOOL get_Bitrate(float *pfBitrate);
 
 private:
-	// TS stream event
+	// Stream event
 	HANDLE *m_phOnStreamEvent;
-	// Purge flag
-	std::atomic_bool m_bPurge;
-	// TS data buffer ( simple ring buffer )
-	std::atomic_ulong m_nPush;
-	std::atomic_ulong m_nPull;
-	BYTE *m_pBuf;
-	BYTE *m_pDst;
 	// Bitrate calculation
 	std::atomic_long m_nAccumData;
+	// Purge flag
+	std::atomic_bool m_bPurge;
+	// TS data buffer (simple ring buffer)
+	std::atomic_ulong m_nPush;
+	std::atomic_ulong m_nPull;
+	BYTE *m_pDst;
+	BYTE *m_pBuf;
 };

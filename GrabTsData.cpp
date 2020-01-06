@@ -3,10 +3,9 @@
 //   Implementation of GrabTsData
 //------------------------------------------------------------------------------
 
-#include "GrabTsData.h" // declares myself
+#include "GrabTsData.h"
 
-// Put TS data in the ring buffer
-// (Transform function)
+// Put TS data into the ring buffer
 //
 BOOL GrabTsData::put_TsStream(BYTE *pSrc, DWORD dwSize)
 {
@@ -44,7 +43,7 @@ BOOL GrabTsData::put_TsStream(BYTE *pSrc, DWORD dwSize)
 	return TRUE;
 }
 
-// Get TS data in the ring buffer
+// Get TS data from the ring buffer
 //
 BOOL GrabTsData::get_TsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRemain)
 {
@@ -117,13 +116,13 @@ BOOL GrabTsData::get_ReadyCount(DWORD *pdwRemain)
 BOOL GrabTsData::get_Bitrate(float *pfBitrate)
 {
 	static double dBitrate = 0;
-	static ULONGLONG dwLastTime = GetTickCount64();
-	ULONGLONG dwNow = GetTickCount64(); // ms
-	ULONGLONG dwDuration = dwNow - dwLastTime;
+	static UINT64 ui64LastTime = GetTickCount64();
+	UINT64 ui64Now = GetTickCount64(); // ms
+	UINT64 ui64Duration = ui64Now - ui64LastTime;
 
-	if (dwDuration >= 1000) {
-		dBitrate = std::atomic_exchange(&m_nAccumData, 0) / dwDuration * 8 * 1000 / 1024 / 1024.0; // Mbps
-		dwLastTime = dwNow;
+	if (ui64Duration >= 1000) {
+		dBitrate = std::atomic_exchange(&m_nAccumData, 0) / ui64Duration * 8 * 1000 / 1024 / 1024.0; // Mbps
+		ui64LastTime = ui64Now;
 	}
 	*pfBitrate = (float)min(dBitrate, 100);
 
