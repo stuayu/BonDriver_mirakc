@@ -116,9 +116,9 @@ BOOL GrabTsData::get_ReadyCount(DWORD *pdwRemain)
 BOOL GrabTsData::get_Bitrate(float *pfBitrate)
 {
 	static double dBitrate = 0;
-	static UINT64 ui64LastTime = GetTickCount64();
-	UINT64 ui64Now = GetTickCount64(); // ms
-	UINT64 ui64Duration = ui64Now - ui64LastTime;
+	static uint64_t ui64LastTime = GetTickCount64();
+	uint64_t ui64Now = GetTickCount64(); // ms
+	uint64_t ui64Duration = ui64Now - ui64LastTime;
 
 	if (ui64Duration >= 1000) {
 		dBitrate = std::atomic_exchange(&m_nAccumData, 0) / ui64Duration * 8 * 1000 / 1024 / 1024.0; // Mbps

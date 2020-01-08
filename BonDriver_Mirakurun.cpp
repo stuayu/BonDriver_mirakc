@@ -352,7 +352,7 @@ const BOOL CBonTuner::IsTunerOpening(void)
 
 LPCTSTR CBonTuner::EnumTuningSpace(const DWORD dwSpace)
 {
-	if (dwSpace > (UINT)g_Max_Type) {
+	if ((int32_t)dwSpace > g_Max_Type) {
 		return NULL;
 	}
 
@@ -367,10 +367,10 @@ LPCTSTR CBonTuner::EnumTuningSpace(const DWORD dwSpace)
 
 LPCTSTR CBonTuner::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 {
-	if (dwSpace > (UINT)g_Max_Type) {
+	if ((int32_t)dwSpace > g_Max_Type) {
 		return NULL;
 	}
-	if (dwSpace < (UINT)g_Max_Type) {
+	if ((int32_t)dwSpace < g_Max_Type) {
 		if (dwChannel >= g_Channel_Base[dwSpace + 1] - g_Channel_Base[dwSpace]) {
 			return NULL;
 		}
@@ -415,7 +415,7 @@ const BOOL CBonTuner::SetChannel(const BYTE bCh)
 // チャンネル設定
 const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 {
-	if (dwSpace > (UINT)g_Max_Type) {
+	if ((int32_t)dwSpace > g_Max_Type) {
 		return FALSE;
 	}
 
@@ -430,7 +430,7 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 	// Server request
 	char url[128];
 	if (g_Service_Split == 1) {
-		const INT64 id = (INT64)channel_obj["id"].get<double>();
+		const int64_t id = (int64_t)channel_obj["id"].get<double>();
 		sprintf_s(url, "/api/services/%lld/stream?decode=%d", id, g_DecodeB25);
 	}
 	else {
@@ -620,7 +620,7 @@ BOOL CBonTuner::sendURL(char *url)
 	return ret;
 }
 
-UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
+unsigned WINAPI CBonTuner::RecvThread(LPVOID pParam)
 {
 	CBonTuner *pThis = (CBonTuner *)pParam;
 	int len = 0;

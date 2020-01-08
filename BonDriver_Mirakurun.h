@@ -95,7 +95,7 @@ protected:
 	BOOL InitChannel(void);
 	BOOL GetApiChannels(picojson::value *json_array, int service_split);
 	BOOL sendURL(char *url);
-	static UINT WINAPI RecvThread(LPVOID pParam);
+	static unsigned WINAPI RecvThread(LPVOID pParam);
 };
 
 #endif // !defined(_BONTUNER_H_)
