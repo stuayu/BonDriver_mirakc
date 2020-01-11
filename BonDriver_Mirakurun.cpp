@@ -44,18 +44,10 @@ static int Init(HMODULE hModule)
 	}
 	CloseHandle(hFile);
 
-	setlocale(LC_ALL, "ja-JP");
-
-	size_t ret;
-	wchar_t tmpServerHost[MAX_HOST_LEN];
-	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost", tmpServerHost,
+	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost", g_ServerHost,
 		MAX_HOST_LEN, g_IniFilePath);
-	wcstombs_s(&ret, g_ServerHost, MAX_HOST_LEN, tmpServerHost, _TRUNCATE);
-
-	wchar_t tmpServerPort[MAX_PORT_LEN];
-	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_PORT", L"8888", tmpServerPort,
-		MAX_PORT_LEN, g_IniFilePath);
-	wcstombs_s(&ret, g_ServerPort, MAX_PORT_LEN, tmpServerPort, _TRUNCATE);
+	g_ServerPort = GetPrivateProfileInt(
+		L"GLOBAL", L"SERVER_PORT", 40772, g_IniFilePath);
 
 	g_DecodeB25 = GetPrivateProfileInt(L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
 	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
@@ -91,10 +83,9 @@ CBonTuner::CBonTuner()
 	, m_hStopEvent(NULL)
 	, m_hRecvThread(NULL)
 	, m_pGrabTsData(NULL)
-	, m_pSrc(NULL)
-	, m_bWinsock(FALSE)
-	, m_res(NULL)
-	, m_sock(INVALID_SOCKET)
+	, hSession(NULL)
+	, hConnect(NULL)
+	, hRequest(NULL)
 	, m_dwCurSpace(0xffffffff)
 	, m_dwCurChannel(0xffffffff)
 {
@@ -130,32 +121,27 @@ const BOOL CBonTuner::OpenTuner()
 	}
 
 	while (1) {
-		// TSバッファー確保
-		m_pSrc = (BYTE *)malloc(DATA_BUF_SIZE);
-		if (!m_pSrc) {
+		// WinHTTP初期化
+		hSession = WinHttpOpen(
+			TEXT(TUNER_NAME "/1.0"), WINHTTP_ACCESS_TYPE_NO_PROXY,
+			WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+		if (!hSession) {
+			char szDebugOut[64];
+			sprintf_s(szDebugOut, "%s: WinHTTP not supported\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
 			break;
 		}
 
-		// Winsock初期化
-		WSADATA stWsa;
-		if (WSAStartup(MAKEWORD(2, 2), &stWsa) != 0) {
-			break;
-		}
-		m_bWinsock = TRUE;
-
-		// ホスト名解決
-		struct addrinfo hints;
-		memset(&hints, 0, sizeof(hints));
-		hints.ai_family = AF_UNSPEC;
-		hints.ai_socktype = SOCK_STREAM;
-		hints.ai_protocol = IPPROTO_TCP;
-		hints.ai_flags = AI_NUMERICSERV;
-		if (getaddrinfo(g_ServerHost, g_ServerPort, &hints, &m_res) < 0) {
+		// サーバー接続
+		hConnect = WinHttpConnect(hSession, g_ServerHost, g_ServerPort, 0);
+		if (!hConnect) {
+			char szDebugOut[64];
+			sprintf_s(szDebugOut, "%s: connection error\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
 			break;
 		}
 
 		//Initialize channel
-		setlocale(LC_ALL, ".utf-8");
 		if (!InitChannel()) {
 			break;
 		}
@@ -194,7 +180,7 @@ void CBonTuner::CloseTuner()
 			// スレッド強制終了
 			::TerminateThread(m_hRecvThread, 0xffffffff);
 
-			char szDebugOut[128];
+			char szDebugOut[64];
 			sprintf_s(szDebugOut,
 				"%s: CloseTuner() ::TerminateThread\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
@@ -221,28 +207,18 @@ void CBonTuner::CloseTuner()
 	}
 	g_Max_Type = -1;
 
-	// ソケットクローズ
-	if (m_sock != INVALID_SOCKET) {
-		closesocket(m_sock);
-		m_sock = INVALID_SOCKET;
+	// WinHTTP開放
+	if (hRequest) {
+		WinHttpCloseHandle(hRequest);
+		hRequest = NULL;
 	}
-
-	// アドレスリソース開放
-	if (m_res) {
-		freeaddrinfo(m_res);
-		m_res = NULL;
+	if (hConnect) {
+		WinHttpCloseHandle(hConnect);
+		hConnect = NULL;
 	}
-
-	// Winsock終了
-	if (m_bWinsock) {
-		WSACleanup();
-		m_bWinsock = FALSE;
-	}
-
-	// TSバッファー開放
-	if (m_pSrc) {
-		free(m_pSrc);
-		m_pSrc = NULL;
+	if (hSession) {
+		WinHttpCloseHandle(hSession);
+		hSession = NULL;
 	}
 
 	// ミューテックス開放
@@ -357,10 +333,9 @@ LPCTSTR CBonTuner::EnumTuningSpace(const DWORD dwSpace)
 	}
 
 	// 使用可能なチューニング空間を返す
-	size_t ret;
 	const int len = 8;
 	static TCHAR buf[len];
-	mbstowcs_s(&ret, buf, len, g_pType[dwSpace], _TRUNCATE);
+	::MultiByteToWideChar(CP_UTF8, 0, g_pType[dwSpace], -1, buf, len);
 
 	return buf;
 }
@@ -385,11 +360,10 @@ LPCTSTR CBonTuner::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
 	// 使用可能なチャンネル名を返す
-	size_t ret;
 	const int len = 128;
 	static TCHAR buf[len];
-	mbstowcs_s(&ret, buf, len,
-		channel_obj["name"].get<std::string>().c_str(), _TRUNCATE);
+	::MultiByteToWideChar(CP_UTF8, 0,
+		channel_obj["name"].get<std::string>().c_str(), -1, buf, len);
 
 	return buf;
 }
@@ -428,17 +402,20 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
 	// Server request
-	char url[128];
+	const int len = 64;
+	wchar_t url[len];
 	if (g_Service_Split == 1) {
 		const int64_t id = (int64_t)channel_obj["id"].get<double>();
-		sprintf_s(url, "/api/services/%lld/stream?decode=%d", id, g_DecodeB25);
+		swprintf_s(url, len,
+			L"/api/services/%lld/stream?decode=%d", id, g_DecodeB25);
 	}
 	else {
 		const char *type = channel_obj["type"].get<std::string>().c_str();
 		const char *channel = channel_obj["channel"].get<std::string>().c_str();
-		sprintf_s(url, "/api/channels/%s/%s/stream?decode=%d", type, channel, g_DecodeB25);
+		swprintf_s(url, len,
+			L"/api/channels/%S/%S/stream?decode=%d", type, channel, g_DecodeB25);
 	}
-	if (!sendURL(url)) {
+	if (!SendRequest(url)) {
 		return FALSE;
 	}
 
@@ -516,106 +493,92 @@ BOOL CBonTuner::InitChannel()
 
 BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 {
-	const int len = 1024 * 64;
-	char *buf;
+	const int len = 14;
+	wchar_t url[len];
 
-	buf = (char *)malloc(len);
-	if (!buf) {
+	wcscpy_s(url, len, L"/api/");
+	if (service_split == 1) {
+		wcscat_s(url, len, L"services");
+	}
+	else {
+		wcscat_s(url, len, L"channels");
+	}
+
+	if (!SendRequest(url)) {
 		return FALSE;
 	}
 
-	strcpy_s(buf, len, "/api/");
-	if (service_split == 1) {
-		strcat_s(buf, len, "services");
-	}
-	else {
-		strcat_s(buf, len, "channels");
-	}
+	char *data = NULL;
+	char *prev = NULL;
+	DWORD dwSize;
+	DWORD dwTotalSize = 0;
+	BOOL ret;
 
-	while (1) {
-		if (!sendURL(buf)) {
+	while(1) {
+		ret = WinHttpQueryDataAvailable(hRequest, &dwSize);
+		if (ret && dwSize > 0) {
+			data = (char *)malloc((size_t)dwTotalSize + dwSize + 1);
+			if (!data) {
+				if (prev) {
+					free(prev);
+				}
+				return FALSE;
+			}
+			if (prev) {
+				::CopyMemory(data, prev, dwTotalSize);
+				free(prev);
+			}
+			WinHttpReadData(hRequest, data + dwTotalSize, dwSize, NULL);
+			prev = data;
+			dwTotalSize += dwSize;
+		}
+		else {
 			break;
 		}
-
-		int ret;
-		ret = recv(m_sock, buf, len - 1, 0);
-		closesocket(m_sock);
-		if (ret < 1) {
-			break;
-		}
-		*(buf + ret) = '\0';
-
-		char *p = strstr(buf, "[{");
-		if (!p) {
-			break;
-		}
-
-		picojson::value v;
-		std::string err = picojson::parse(v, p);
-		if (!err.empty()) {
-			break;
-		}
-		*channel_json = v;
-
-		free(buf);
-
-		return TRUE;
 	}
 
-	free(buf);
+	if (!data) {
+		return FALSE;
+	}
 
-	return FALSE;
+	*(data + dwTotalSize) = '\0';
+
+	picojson::value v;
+	std::string err = picojson::parse(v, data);
+	if (!err.empty()) {
+		return FALSE;
+	}
+	*channel_json = v;
+
+	free(data);
+
+	return TRUE;
 }
 
-BOOL CBonTuner::sendURL(char *url)
+BOOL CBonTuner::SendRequest(wchar_t *url)
 {
-	BOOL ret = TRUE;
-	struct addrinfo *ai;
+	BOOL ret = FALSE;
 
-	EnterCriticalSection(&m_CriticalSection);
+	::EnterCriticalSection(&m_CriticalSection);
 
-	// Close opened socket
-	if (m_sock != INVALID_SOCKET) {
-		closesocket(m_sock);
-		m_sock = INVALID_SOCKET;
+	if (hRequest) {
+		WinHttpCloseHandle(hRequest);
+		Sleep(100);
 	}
 
-	for (ai = m_res; ai; ai = ai->ai_next) {
-		m_sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-		if (m_sock == INVALID_SOCKET) {
-			continue;
-		}
-
-		if (connect(m_sock, ai->ai_addr, (int)ai->ai_addrlen) >= 0) {
-			// OK
-			break;
-		}
-		closesocket(m_sock);
-		m_sock = INVALID_SOCKET;
-	}
-
-	if (m_sock == INVALID_SOCKET) {
-		char szDebugOut[128];
-		sprintf_s(szDebugOut,
-			"%s: connection error %d\n", g_TunerName, WSAGetLastError());
-		::OutputDebugStringA(szDebugOut);
-		ret = FALSE;
-	}
-	else {
-		char serverRequest[256];
-		sprintf_s(serverRequest,
-			"GET %s HTTP/1.1\r\nX-Mirakurun-Priority: %d\r\n\r\n", url, g_Priority);
-		if (send(m_sock, serverRequest, (int)strlen(serverRequest), 0) < 0) {
-			closesocket(m_sock);
-			char szDebugOut[128];
-			sprintf_s(szDebugOut,
-				"%s: send error %d\n", g_TunerName, WSAGetLastError());
-			::OutputDebugStringA(szDebugOut);
-			ret = FALSE;
+	hRequest = WinHttpOpenRequest(
+		hConnect, L"GET", url, NULL, WINHTTP_NO_REFERER, NULL, 0);
+	if (hRequest) {
+		const int len = 33;
+		wchar_t szHeader[len];
+		swprintf_s(szHeader, len, L"X-Mirakurun-Priority: %d", g_Priority);
+		if (WinHttpSendRequest(hRequest, szHeader, -1L,
+			WINHTTP_NO_REQUEST_DATA, 0, WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
+			ret = WinHttpReceiveResponse(hRequest, NULL);
 		}
 	}
 
-	LeaveCriticalSection(&m_CriticalSection);
+	::LeaveCriticalSection(&m_CriticalSection);
 
 	return ret;
 }
@@ -623,26 +586,31 @@ BOOL CBonTuner::sendURL(char *url)
 unsigned WINAPI CBonTuner::RecvThread(LPVOID pParam)
 {
 	CBonTuner *pThis = (CBonTuner *)pParam;
-	int len = 0;
-
-	if (!pThis->m_pSrc) {
-		return 0;
-	}
+	BYTE *data;
+	DWORD dwSize;
+	BOOL ret;
 
 	while (1) {
 		if (::WaitForSingleObject(pThis->m_hStopEvent, 0) != WAIT_TIMEOUT) {
 			//中止
 			break;
 		}
+
 		::EnterCriticalSection(&pThis->m_CriticalSection);
-		if (pThis->m_sock != INVALID_SOCKET) {
-			len = recv(pThis->m_sock, (char *)pThis->m_pSrc, DATA_BUF_SIZE, 0);
+
+		if (pThis->hRequest) {
+			ret = WinHttpQueryDataAvailable(pThis->hRequest, &dwSize);
+			if (ret && dwSize > 0) {
+				data = (BYTE *)malloc(dwSize);
+				if (data) {
+					WinHttpReadData(pThis->hRequest, data, dwSize, NULL);
+					pThis->m_pGrabTsData->put_TsStream(data, dwSize);
+					free(data);
+				}
+			}
 		}
+
 		::LeaveCriticalSection(&pThis->m_CriticalSection);
-		if (len > 0) {
-			pThis->m_pGrabTsData->put_TsStream(pThis->m_pSrc, len);
-			len = 0;
-		}
 	}
 
 	return 0;

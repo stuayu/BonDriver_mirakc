@@ -1,11 +1,11 @@
 ﻿#include <process.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <windows.h>
+#include <winhttp.h>
 #include "IBonDriver2.h"
 #include "GrabTsData.h"
 #include "picojson\picojson.h"
 
-#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "winhttp.lib")
 
 #if !defined(_BONTUNER_H_)
 #define _BONTUNER_H_
@@ -21,9 +21,8 @@ static const char g_TunerName[] = TUNER_NAME;
 static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };
 
 #define MAX_HOST_LEN 256
-#define MAX_PORT_LEN 8
-static char g_ServerHost[MAX_HOST_LEN];
-static char g_ServerPort[MAX_PORT_LEN];
+static wchar_t g_ServerHost[MAX_HOST_LEN];
+static uint32_t g_ServerPort;
 static int g_DecodeB25;
 static int g_Priority;
 static int g_Service_Split;
@@ -84,17 +83,16 @@ protected:
 
 	GrabTsData *m_pGrabTsData;
 
-	BYTE *m_pSrc;
-	bool m_bWinsock;
-	struct addrinfo *m_res;
-	SOCKET m_sock;
+	HINTERNET hSession;
+	HINTERNET hConnect;
+	HINTERNET hRequest;
 
 	DWORD m_dwCurSpace;
 	DWORD m_dwCurChannel;
 
 	BOOL InitChannel(void);
 	BOOL GetApiChannels(picojson::value *json_array, int service_split);
-	BOOL sendURL(char *url);
+	BOOL SendRequest(wchar_t *url);
 	static unsigned WINAPI RecvThread(LPVOID pParam);
 };
 
