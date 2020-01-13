@@ -23,6 +23,7 @@ static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };
 #define MAX_HOST_LEN 256
 static wchar_t g_ServerHost[MAX_HOST_LEN];
 static uint32_t g_ServerPort;
+static int g_Wait;
 static int g_DecodeB25;
 static int g_Priority;
 static int g_Service_Split;
@@ -93,7 +94,7 @@ protected:
 	BOOL InitChannel(void);
 	BOOL GetApiChannels(picojson::value *json_array, int service_split);
 	BOOL SendRequest(wchar_t *url);
-	static unsigned WINAPI RecvThread(LPVOID pParam);
+	static UINT WINAPI RecvThread(LPVOID pParam);
 };
 
 #endif // !defined(_BONTUNER_H_)

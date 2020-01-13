@@ -37,20 +37,23 @@ static int Init(HMODULE hModule)
 		drive, _MAX_DRIVE, dir, _MAX_DIR, fname, _MAX_FNAME, NULL, NULL);
 	wsprintf(g_IniFilePath, L"%s%s%s.ini\0", drive, dir, fname);
 
-	HANDLE hFile = CreateFile(g_IniFilePath, GENERIC_READ, FILE_SHARE_READ, NULL,
-		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hFile = CreateFile(g_IniFilePath, GENERIC_READ,
+		FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE) {
 		return -2;
 	}
 	CloseHandle(hFile);
 
-	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost", g_ServerHost,
-		MAX_HOST_LEN, g_IniFilePath);
+	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost"
+		, g_ServerHost, MAX_HOST_LEN, g_IniFilePath);
 	g_ServerPort = GetPrivateProfileInt(
 		L"GLOBAL", L"SERVER_PORT", 40772, g_IniFilePath);
 
-	g_DecodeB25 = GetPrivateProfileInt(L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
-	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
+	g_Wait = GetPrivateProfileInt(L"GLOBAL", L"WAIT", 500, g_IniFilePath);
+	g_DecodeB25 = GetPrivateProfileInt(
+		L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
+	g_Priority = GetPrivateProfileInt(
+		L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
 	g_Service_Split = GetPrivateProfileInt(
 		L"GLOBAL", L"SERVICE_SPLIT", 0, g_IniFilePath);
 
@@ -65,7 +68,8 @@ static int Init(HMODULE hModule)
 extern "C" __declspec(dllexport) IBonDriver * CreateBonDriver()
 {
 	// スタンス生成(既存の場合はインスタンスのポインタを返す)
-	return (CBonTuner::m_pThis)? CBonTuner::m_pThis : ((IBonDriver *) new CBonTuner);
+	return (CBonTuner::m_pThis)?
+		CBonTuner::m_pThis : ((IBonDriver *) new CBonTuner);
 }
 
 
@@ -128,15 +132,6 @@ const BOOL CBonTuner::OpenTuner()
 		if (!hSession) {
 			char szDebugOut[64];
 			sprintf_s(szDebugOut, "%s: WinHTTP not supported\n", g_TunerName);
-			::OutputDebugStringA(szDebugOut);
-			break;
-		}
-
-		// サーバー接続
-		hConnect = WinHttpConnect(hSession, g_ServerHost, g_ServerPort, 0);
-		if (!hConnect) {
-			char szDebugOut[64];
-			sprintf_s(szDebugOut, "%s: connection error\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
 			break;
 		}
@@ -563,19 +558,70 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 
 	if (hRequest) {
 		WinHttpCloseHandle(hRequest);
-		Sleep(100);
+		hRequest = NULL;
+	}
+	if (hConnect) {
+		WinHttpCloseHandle(hConnect);
 	}
 
-	hRequest = WinHttpOpenRequest(
-		hConnect, L"GET", url, NULL, WINHTTP_NO_REFERER, NULL, 0);
-	if (hRequest) {
-		const int len = 33;
-		wchar_t szHeader[len];
-		swprintf_s(szHeader, len, L"X-Mirakurun-Priority: %d", g_Priority);
-		if (WinHttpSendRequest(hRequest, szHeader, -1L,
-			WINHTTP_NO_REQUEST_DATA, 0, WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
-			ret = WinHttpReceiveResponse(hRequest, NULL);
+	::Sleep(g_Wait);
+
+	while (1) {
+		// サーバー接続
+		hConnect = WinHttpConnect(hSession, g_ServerHost, g_ServerPort, 0);
+		if (!hConnect) {
+			char szDebugOut[64];
+			sprintf_s(szDebugOut, "%s: Connection failed\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
+			break;
 		}
+
+		hRequest = WinHttpOpenRequest(
+			hConnect, L"GET", url, NULL, WINHTTP_NO_REFERER, NULL, 0);
+		if (!hRequest) {
+			char szDebugOut[64];
+			sprintf_s(szDebugOut, "%s: OpenRequest failed\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
+			break;
+		}
+
+		ULONG val = 100;
+		WinHttpSetOption(
+			hRequest, WINHTTP_OPTION_RECEIVE_TIMEOUT, &val, sizeof(val));
+
+		int i = 0;
+		const int len = 64;
+		wchar_t szHeader[len];
+		swprintf_s(szHeader, len,
+			L"Connection: close\r\nX-Mirakurun-Priority: %d", g_Priority);
+		while (1) {
+			ret = FALSE;
+			if (WinHttpSendRequest(
+				hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
+				WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
+				ret = WinHttpReceiveResponse(hRequest, NULL);
+			}
+
+			if (ret) {
+				DWORD dwStatusCode = 0;
+				DWORD dwSize = sizeof(dwStatusCode);
+				WinHttpQueryHeaders(hRequest,
+					WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+					WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize,
+					WINHTTP_NO_HEADER_INDEX);
+				if (dwStatusCode == HTTP_STATUS_OK) {
+					break;
+				}
+				else {
+					::Sleep(100);
+				}
+			}
+			if (i == 10) {
+				break;
+			}
+			i++;
+		}
+		break;
 	}
 
 	::LeaveCriticalSection(&m_CriticalSection);
@@ -583,7 +629,7 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 	return ret;
 }
 
-unsigned WINAPI CBonTuner::RecvThread(LPVOID pParam)
+UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
 {
 	CBonTuner *pThis = (CBonTuner *)pParam;
 	BYTE *data;
