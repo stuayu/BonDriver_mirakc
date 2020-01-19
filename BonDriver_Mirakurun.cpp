@@ -49,7 +49,6 @@ static int Init(HMODULE hModule)
 	g_ServerPort = GetPrivateProfileInt(
 		L"GLOBAL", L"SERVER_PORT", 40772, g_IniFilePath);
 
-	g_Wait = GetPrivateProfileInt(L"GLOBAL", L"WAIT", 500, g_IniFilePath);
 	g_DecodeB25 = GetPrivateProfileInt(
 		L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
 	g_Priority = GetPrivateProfileInt(
@@ -118,13 +117,21 @@ CBonTuner::~CBonTuner()
 
 const BOOL CBonTuner::OpenTuner()
 {
-	// ミューテックス作成
-	m_hMutex = ::CreateMutexA(NULL, TRUE, g_TunerName);
-	if (!m_hMutex) {
-		return FALSE;
-	}
-
 	while (1) {
+		// ミューテックス作成
+		m_hMutex = ::CreateMutexA(NULL, TRUE, g_TunerName);
+		if (!m_hMutex) {
+			break;
+		}
+
+		// イベントオブジェクト作成
+		g_hCloseEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+		m_hOnStreamEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+		m_hStopEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+		if (!g_hCloseEvent || !m_hOnStreamEvent || !m_hStopEvent) {
+			break;
+		}
+
 		// WinHTTP初期化
 		hSession = WinHttpOpen(
 			TEXT(TUNER_NAME "/1.0"), WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -136,14 +143,19 @@ const BOOL CBonTuner::OpenTuner()
 			break;
 		}
 
+		// サーバー接続
+		hConnect = WinHttpConnect(hSession, g_ServerHost, g_ServerPort, 0);
+		if (!hConnect) {
+			char szDebugOut[64];
+			sprintf_s(szDebugOut, "%s: Connection failed\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
+			break;
+		}
+
 		//Initialize channel
 		if (!InitChannel()) {
 			break;
 		}
-
-		// イベントオブジェクト作成
-		m_hOnStreamEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
-		m_hStopEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
 
 		// スレッド起動
 		m_hRecvThread = (HANDLE)_beginthreadex(NULL, 0, CBonTuner::RecvThread,
@@ -184,16 +196,6 @@ void CBonTuner::CloseTuner()
 		m_hRecvThread = NULL;
 	}
 
-	// イベントオブジェクト開放
-	if (m_hStopEvent) {
-		::CloseHandle(m_hStopEvent);
-		m_hStopEvent = NULL;
-	}
-	if (m_hOnStreamEvent) {
-		::CloseHandle(m_hOnStreamEvent);
-		m_hOnStreamEvent = NULL;
-	}
-
 	// チューニング空間解放
 	for (int i = 0; i <= g_Max_Type; i++) {
 		if (g_pType[i]) {
@@ -205,6 +207,7 @@ void CBonTuner::CloseTuner()
 	// WinHTTP開放
 	if (hRequest) {
 		WinHttpCloseHandle(hRequest);
+		::WaitForSingleObject(g_hCloseEvent, 5000);
 		hRequest = NULL;
 	}
 	if (hConnect) {
@@ -214,6 +217,20 @@ void CBonTuner::CloseTuner()
 	if (hSession) {
 		WinHttpCloseHandle(hSession);
 		hSession = NULL;
+	}
+
+	// イベントオブジェクト開放
+	if (m_hStopEvent) {
+		::CloseHandle(m_hStopEvent);
+		m_hStopEvent = NULL;
+	}
+	if (m_hOnStreamEvent) {
+		::CloseHandle(m_hOnStreamEvent);
+		m_hOnStreamEvent = NULL;
+	}
+	if (g_hCloseEvent) {
+		::CloseHandle(g_hCloseEvent);
+		g_hCloseEvent = NULL;
 	}
 
 	// ミューテックス開放
@@ -553,80 +570,92 @@ BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 BOOL CBonTuner::SendRequest(wchar_t *url)
 {
 	BOOL ret = FALSE;
+	char szDebugOut[64];
 
 	::EnterCriticalSection(&m_CriticalSection);
 
-	if (hRequest) {
-		WinHttpCloseHandle(hRequest);
-		hRequest = NULL;
-	}
-	if (hConnect) {
-		WinHttpCloseHandle(hConnect);
-	}
+	int i = 0;
+	while (i++ < 3) {
+		if (i > 0) {
+			::Sleep(500);
+		}
 
-	::Sleep(g_Wait);
-
-	while (1) {
-		// サーバー接続
-		hConnect = WinHttpConnect(hSession, g_ServerHost, g_ServerPort, 0);
-		if (!hConnect) {
-			char szDebugOut[64];
-			sprintf_s(szDebugOut, "%s: Connection failed\n", g_TunerName);
-			::OutputDebugStringA(szDebugOut);
-			break;
+		if (hRequest) {
+			WinHttpCloseHandle(hRequest);
+			::WaitForSingleObject(g_hCloseEvent, 5000);
 		}
 
 		hRequest = WinHttpOpenRequest(
 			hConnect, L"GET", url, NULL, WINHTTP_NO_REFERER, NULL, 0);
 		if (!hRequest) {
-			char szDebugOut[64];
 			sprintf_s(szDebugOut, "%s: OpenRequest failed\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
-			break;
+			continue;
 		}
 
-		ULONG val = 100;
-		WinHttpSetOption(
-			hRequest, WINHTTP_OPTION_RECEIVE_TIMEOUT, &val, sizeof(val));
+		if (WINHTTP_INVALID_STATUS_CALLBACK ==
+			WinHttpSetStatusCallback(hRequest, InternetCallback,
+				WINHTTP_CALLBACK_FLAG_ALL_NOTIFICATIONS, NULL)) {
+			char szDebugOut[64];
+			sprintf_s(szDebugOut,
+				"%s: Callback function not set\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
+			continue;
+		}
 
-		int i = 0;
+		ULONG timeout = 5000;
+		WinHttpSetOption(
+			hRequest, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+
 		const int len = 64;
 		wchar_t szHeader[len];
 		swprintf_s(szHeader, len,
 			L"Connection: close\r\nX-Mirakurun-Priority: %d", g_Priority);
-		while (1) {
-			ret = FALSE;
-			if (WinHttpSendRequest(
-				hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
-				WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
-				ret = WinHttpReceiveResponse(hRequest, NULL);
-			}
-
-			if (ret) {
-				DWORD dwStatusCode = 0;
-				DWORD dwSize = sizeof(dwStatusCode);
-				WinHttpQueryHeaders(hRequest,
-					WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-					WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize,
-					WINHTTP_NO_HEADER_INDEX);
-				if (dwStatusCode == HTTP_STATUS_OK) {
-					break;
-				}
-				else {
-					::Sleep(100);
-				}
-			}
-			if (i == 10) {
-				break;
-			}
-			i++;
+		if (!WinHttpSendRequest(
+			hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
+			WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
+			sprintf_s(szDebugOut, "%s: SendRequest failed\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
+			continue;
 		}
+
+		WinHttpReceiveResponse(hRequest, NULL);
+
+		DWORD dwStatusCode = 0;
+		DWORD dwSize = sizeof(dwStatusCode);
+		WinHttpQueryHeaders(hRequest,
+			WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+			WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize,
+			WINHTTP_NO_HEADER_INDEX);
+		if (dwStatusCode != HTTP_STATUS_OK) {
+			sprintf_s(szDebugOut, "%s: Invalid response\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
+			continue;
+		}
+
+		ret = TRUE;
 		break;
 	}
 
 	::LeaveCriticalSection(&m_CriticalSection);
 
 	return ret;
+}
+
+void CALLBACK CBonTuner::InternetCallback(
+	HINTERNET hInternet, DWORD_PTR dwContext, DWORD dwInternetStatus,
+	LPVOID lpvStatusInformation, DWORD dwStatusInformationLength)
+{
+	switch (dwInternetStatus)
+	{
+		case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
+			SetEvent(g_hCloseEvent);
+			break;
+		case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR:
+			char szDebugOut[64];
+			sprintf_s(szDebugOut, "%s: Request error\n", g_TunerName);
+			::OutputDebugStringA(szDebugOut);
+	}
 }
 
 UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
