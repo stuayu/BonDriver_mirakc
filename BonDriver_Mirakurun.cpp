@@ -603,10 +603,6 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 			continue;
 		}
 
-		ULONG timeout = 5000;
-		WinHttpSetOption(
-			hRequest, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
-
 		const int len = 64;
 		wchar_t szHeader[len];
 		swprintf_s(szHeader, len,
