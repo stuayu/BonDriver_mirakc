@@ -574,12 +574,7 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 
 	::EnterCriticalSection(&m_CriticalSection);
 
-	int i = 0;
-	while (i++ < 3) {
-		if (i > 0) {
-			::Sleep(500);
-		}
-
+	while (1) {
 		if (hRequest) {
 			WinHttpCloseHandle(hRequest);
 			::WaitForSingleObject(g_hCloseEvent, 5000);
@@ -590,7 +585,7 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 		if (!hRequest) {
 			sprintf_s(szDebugOut, "%s: OpenRequest failed\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
-			continue;
+			break;
 		}
 
 		if (WINHTTP_INVALID_STATUS_CALLBACK ==
@@ -600,36 +595,46 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 			sprintf_s(szDebugOut,
 				"%s: Callback function not set\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
-			continue;
+			break;
 		}
 
 		const int len = 64;
 		wchar_t szHeader[len];
 		swprintf_s(szHeader, len,
 			L"Connection: close\r\nX-Mirakurun-Priority: %d", g_Priority);
-		if (!WinHttpSendRequest(
-			hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
-			WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
-			sprintf_s(szDebugOut, "%s: SendRequest failed\n", g_TunerName);
-			::OutputDebugStringA(szDebugOut);
-			continue;
-		}
 
-		WinHttpReceiveResponse(hRequest, NULL);
+		int i = 0;
+		do {
+			if (i > 0) {
+				::Sleep(200);
+			}
 
-		DWORD dwStatusCode = 0;
-		DWORD dwSize = sizeof(dwStatusCode);
-		WinHttpQueryHeaders(hRequest,
-			WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-			WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize,
-			WINHTTP_NO_HEADER_INDEX);
-		if (dwStatusCode != HTTP_STATUS_OK) {
-			sprintf_s(szDebugOut, "%s: Invalid response\n", g_TunerName);
-			::OutputDebugStringA(szDebugOut);
-			continue;
-		}
+			if (!WinHttpSendRequest(
+				hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
+				WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
+				sprintf_s(szDebugOut, "%s: SendRequest failed\n", g_TunerName);
+				::OutputDebugStringA(szDebugOut);
+				break;
+			}
 
-		ret = TRUE;
+			WinHttpReceiveResponse(hRequest, NULL);
+
+			DWORD dwStatusCode = 0;
+			DWORD dwSize = sizeof(dwStatusCode);
+			WinHttpQueryHeaders(hRequest,
+				WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+				WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize,
+				WINHTTP_NO_HEADER_INDEX);
+			if (dwStatusCode == HTTP_STATUS_OK) {
+				ret = TRUE;
+				break;
+			}
+			else{
+				sprintf_s(szDebugOut, "%s: Invalid response\n", g_TunerName);
+				::OutputDebugStringA(szDebugOut);
+			}
+		} while (++i < 5);
+
 		break;
 	}
 
