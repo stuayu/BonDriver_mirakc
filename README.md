@@ -1,19 +1,9 @@
-# BonDriver_Mirakurun
+# BonDriver_mirakc
 
-TVTestから[Mirakurun](https://github.com/kanreisa/Mirakurun)を利用する為のBonDriverです。
+TVTestから[mirakc](https://github.com/masnagam/mirakc)を利用する為のBonDriverです。
 
-ソースコードのベースはBonDriver_HTTPからです。  
-Visual Studio Community 2015 でビルド、TVTest 0.9.0-dev(x64) の環境で動作確認しております。
-
-## ビルド済みDLL
-不定期に(作者的に)安定版DLLはこちらにアップロードしております  
-https://github.com/Chinachu/BonDriver_Mirakurun/releases
-
-## ランタイム
-[Microsoft Visual C++ 2015 Redistrebutable]を必要とします  
-
-Microsoft公式よりラインタイムのダウンロードおよびインストールを行ってください  
-https://support.microsoft.com/ja-jp/help/2977003/the-latest-supported-visual-c-downloads
+ソースコードのベースは[BonDriver_Mirakurun](https://github.com/Chinachu/BonDriver_Mirakurun)からです。  
+Visual Studio Community 2019、TVTest 0.10.0-dev(x64)の環境で動作確認しております。
 
 ## License
 This software is released under the MIT License, see LICENSE.
