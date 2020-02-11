@@ -15,7 +15,7 @@
 #endif // _MSC_VER > 1000
 
 #define dllimport dllexport
-#define TUNER_NAME "BonDriver_Mirakurun"
+#define TUNER_NAME "BonDriver_mirakc"
 
 static const char g_TunerName[] = TUNER_NAME;
 static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };

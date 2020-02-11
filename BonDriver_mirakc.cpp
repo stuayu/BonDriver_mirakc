@@ -1,4 +1,4 @@
-﻿#include "BonDriver_Mirakurun.h"
+﻿#include "BonDriver_mirakc.h"
 
 //////////////////////////////////////////////////////////////////////
 // DLLMain
@@ -453,7 +453,7 @@ const float CBonTuner::GetSignalLevel(void)
 
 BOOL CBonTuner::InitChannel()
 {
-	// Mirakurun APIよりchannel取得
+	// mirakc APIよりchannel取得
 	if (!GetApiChannels(&g_Channel_JSON, g_Service_Split)) {
 		return FALSE;
 	}
@@ -577,6 +577,7 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 	while (1) {
 		if (hRequest) {
 			WinHttpCloseHandle(hRequest);
+			::Sleep(100);
 			::WaitForSingleObject(g_hCloseEvent, 5000);
 		}
 
@@ -604,11 +605,7 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 			L"Connection: close\r\nX-Mirakurun-Priority: %d", g_Priority);
 
 		int i = 0;
-		do {
-			if (i > 0) {
-				::Sleep(200);
-			}
-
+		while (1) {
 			if (!WinHttpSendRequest(
 				hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
 				WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
@@ -633,8 +630,14 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 				sprintf_s(szDebugOut, "%s: Invalid response\n", g_TunerName);
 				::OutputDebugStringA(szDebugOut);
 			}
-		} while (++i < 5);
 
+			if (++i < 2) {
+				::Sleep(500);
+			}
+			else {
+				break;
+			}
+		}
 		break;
 	}
 
