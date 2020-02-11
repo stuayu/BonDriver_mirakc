@@ -627,7 +627,7 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 				break;
 			}
 			else{
-				sprintf_s(szDebugOut, "%s: Invalid response\n", g_TunerName);
+				sprintf_s(szDebugOut, "%s: Tuner unavailable\n", g_TunerName);
 				::OutputDebugStringA(szDebugOut);
 			}
 
