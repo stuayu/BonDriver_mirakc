@@ -428,7 +428,7 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 			L"/api/channels/%S/%S/stream?decode=%d", type, channel, g_DecodeB25);
 	}
 	if (!SendRequest(url)) {
-		return FALSE;
+		return TRUE;  // to complete channel setting
 	}
 
 	// チャンネル情報更新
