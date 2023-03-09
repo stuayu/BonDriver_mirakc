@@ -23,11 +23,12 @@ static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };
 #define MAX_HOST_LEN 256
 static wchar_t g_ServerHost[MAX_HOST_LEN];
 static uint32_t g_ServerPort;
+static int g_Secure;
 static int g_DecodeB25;
 static int g_Priority;
 static int g_Service_Split;
 
-#define SPACE_NUM 8
+#define SPACE_NUM 100
 static char *g_pType[SPACE_NUM];
 static int g_Max_Type = -1;
 static DWORD g_Channel_Base[SPACE_NUM];
@@ -88,6 +89,8 @@ protected:
 	HINTERNET hSession;
 	HINTERNET hConnect;
 	HINTERNET hRequest;
+	DWORD TLSValue;
+	DWORD HTTPVersion;
 
 	DWORD m_dwCurSpace;
 	DWORD m_dwCurChannel;

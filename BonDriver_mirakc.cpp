@@ -27,6 +27,7 @@ BOOL APIENTRY DllMain(HINSTANCE hModule, DWORD fdwReason, LPVOID lpReserved)
 }
 
 static int Init(HMODULE hModule)
+//iniファイルから設定項目を読み取り
 {
 	GetModuleFileName(hModule, g_IniFilePath, MAX_PATH);
 
@@ -48,6 +49,9 @@ static int Init(HMODULE hModule)
 		, g_ServerHost, MAX_HOST_LEN, g_IniFilePath);
 	g_ServerPort = GetPrivateProfileInt(
 		L"GLOBAL", L"SERVER_PORT", 40772, g_IniFilePath);
+
+	g_Secure = GetPrivateProfileInt(
+		L"GLOBAL", L"SECURE", 0, g_IniFilePath);
 
 	g_DecodeB25 = GetPrivateProfileInt(
 		L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
@@ -141,6 +145,14 @@ const BOOL CBonTuner::OpenTuner()
 			sprintf_s(szDebugOut, "%s: WinHTTP not supported\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
 			break;
+		}
+
+		// HTTP v2/v3 TLS1.2/1.3を有効化
+		if (g_Secure == 1) {
+			TLSValue = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+			HTTPVersion = WINHTTP_PROTOCOL_FLAG_HTTP2 | WINHTTP_PROTOCOL_FLAG_HTTP3;
+			WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &TLSValue, sizeof(TLSValue));
+			WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &HTTPVersion, sizeof(HTTPVersion));
 		}
 
 		// サーバー接続
@@ -582,7 +594,7 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 		}
 
 		hRequest = WinHttpOpenRequest(
-			hConnect, L"GET", url, NULL, WINHTTP_NO_REFERER, NULL, 0);
+			hConnect, L"GET", url, NULL, WINHTTP_NO_REFERER, NULL, g_Secure == 1 ? WINHTTP_FLAG_SECURE : 0);
 		if (!hRequest) {
 			sprintf_s(szDebugOut, "%s: OpenRequest failed\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
