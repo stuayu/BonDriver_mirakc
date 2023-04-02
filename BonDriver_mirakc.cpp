@@ -27,7 +27,7 @@ BOOL APIENTRY DllMain(HINSTANCE hModule, DWORD fdwReason, LPVOID lpReserved)
 }
 
 static int Init(HMODULE hModule)
-//iniファイルから設定項目を読み取り
+// iniファイルから設定項目を読み取り
 {
 	GetModuleFileName(hModule, g_IniFilePath, MAX_PATH);
 
@@ -35,53 +35,49 @@ static int Init(HMODULE hModule)
 	wchar_t dir[_MAX_DIR];
 	wchar_t fname[_MAX_FNAME];
 	_wsplitpath_s(g_IniFilePath,
-		drive, _MAX_DRIVE, dir, _MAX_DIR, fname, _MAX_FNAME, NULL, NULL);
+				  drive, _MAX_DRIVE, dir, _MAX_DIR, fname, _MAX_FNAME, NULL, NULL);
 	wsprintf(g_IniFilePath, L"%s%s%s.ini\0", drive, dir, fname);
 
 	HANDLE hFile = CreateFile(g_IniFilePath, GENERIC_READ,
-		FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+							  FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE) {
 		return -2;
 	}
 	CloseHandle(hFile);
 
-	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost"
-		, g_ServerHost, MAX_HOST_LEN, g_IniFilePath);
-	g_ServerPort = GetPrivateProfileInt(
-		L"GLOBAL", L"SERVER_PORT", 40772, g_IniFilePath);
+	GetPrivateProfileStringW(L"GLOBAL", L"SERVER_HOST", L"localhost", g_ServerHost, MAX_HOST_LEN, g_IniFilePath);
+	g_ServerPort = GetPrivateProfileInt(L"GLOBAL", L"SERVER_PORT", 40772, g_IniFilePath);
+	// iniからヘッダ情報を読み込み
+	GetPrivateProfileStringW(L"GLOBAL", L"HEADER1", L"", g_Header1, MAX_HOST_LEN, g_IniFilePath);
+	GetPrivateProfileStringW(L"GLOBAL", L"HEADER2", L"", g_Header2, MAX_HOST_LEN, g_IniFilePath);
+	GetPrivateProfileStringW(L"GLOBAL", L"HEADER3", L"", g_Header3, MAX_HOST_LEN, g_IniFilePath);
+	GetPrivateProfileStringW(L"GLOBAL", L"HEADER4", L"", g_Header4, MAX_HOST_LEN, g_IniFilePath);
 
-	g_Secure = GetPrivateProfileInt(
-		L"GLOBAL", L"SECURE", 0, g_IniFilePath);
+	g_Secure = GetPrivateProfileInt(L"GLOBAL", L"SECURE", 0, g_IniFilePath);
 
-	g_DecodeB25 = GetPrivateProfileInt(
-		L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
-	g_Priority = GetPrivateProfileInt(
-		L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
-	g_Service_Split = GetPrivateProfileInt(
-		L"GLOBAL", L"SERVICE_SPLIT", 0, g_IniFilePath);
+	g_DecodeB25 = GetPrivateProfileInt(L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
+	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
+	g_Service_Split = GetPrivateProfileInt(L"GLOBAL", L"SERVICE_SPLIT", 0, g_IniFilePath);
 
 	return 0;
 }
-
 
 //////////////////////////////////////////////////////////////////////
 // インスタンス生成メソッド
 //////////////////////////////////////////////////////////////////////
 
-extern "C" __declspec(dllexport) IBonDriver * CreateBonDriver()
+extern "C" __declspec(dllexport) IBonDriver *CreateBonDriver()
 {
 	// スタンス生成(既存の場合はインスタンスのポインタを返す)
-	return (CBonTuner::m_pThis)?
-		CBonTuner::m_pThis : ((IBonDriver *) new CBonTuner);
+	return (CBonTuner::m_pThis) ? CBonTuner::m_pThis : ((IBonDriver *)new CBonTuner);
 }
-
 
 //////////////////////////////////////////////////////////////////////
 // 構築/消滅
 //////////////////////////////////////////////////////////////////////
 
 // 静的メンバ初期化
-CBonTuner * CBonTuner::m_pThis = NULL;
+CBonTuner *CBonTuner::m_pThis = NULL;
 HINSTANCE CBonTuner::m_hModule = NULL;
 
 CBonTuner::CBonTuner()
@@ -164,19 +160,19 @@ const BOOL CBonTuner::OpenTuner()
 			break;
 		}
 
-		//Initialize channel
+		// Initialize channel
 		if (!InitChannel()) {
 			break;
 		}
 
 		// スレッド起動
 		m_hRecvThread = (HANDLE)_beginthreadex(NULL, 0, CBonTuner::RecvThread,
-			(LPVOID)this, 0, NULL);
+											   (LPVOID)this, 0, NULL);
 		if (!m_hRecvThread) {
 			break;
 		}
 
-		//return SetChannel(0UL,0UL);
+		// return SetChannel(0UL,0UL);
 
 		return TRUE;
 	}
@@ -201,7 +197,7 @@ void CBonTuner::CloseTuner()
 
 			char szDebugOut[64];
 			sprintf_s(szDebugOut,
-				"%s: CloseTuner() ::TerminateThread\n", g_TunerName);
+					  "%s: CloseTuner() ::TerminateThread\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
 		}
 		::CloseHandle(m_hRecvThread);
@@ -262,22 +258,22 @@ const DWORD CBonTuner::WaitTsStream(const DWORD dwTimeOut)
 
 	// イベントがシグナル状態になるのを待つ
 	const DWORD dwRet = ::WaitForSingleObject(m_hOnStreamEvent,
-		(dwTimeOut) ? dwTimeOut : INFINITE);
+											  (dwTimeOut) ? dwTimeOut : INFINITE);
 
 	switch (dwRet) {
-		case WAIT_ABANDONED :
-			// チューナが閉じられた
-			return WAIT_ABANDONED;
+	case WAIT_ABANDONED:
+		// チューナが閉じられた
+		return WAIT_ABANDONED;
 
-		case WAIT_OBJECT_0 :
-		case WAIT_TIMEOUT :
-			// ストリーム取得可能
-			return dwRet;
+	case WAIT_OBJECT_0:
+	case WAIT_TIMEOUT:
+		// ストリーム取得可能
+		return dwRet;
 
-		case WAIT_FAILED :
-		default:
-			// 例外
-			return WAIT_FAILED;
+	case WAIT_FAILED:
+	default:
+		// 例外
+		return WAIT_FAILED;
 	}
 }
 
@@ -380,14 +376,14 @@ LPCTSTR CBonTuner::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 		return NULL;
 	}
 
-	picojson::object& channel_obj =
+	picojson::object &channel_obj =
 		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
 	// 使用可能なチャンネル名を返す
 	const int len = 128;
 	static TCHAR buf[len];
 	::MultiByteToWideChar(CP_UTF8, 0,
-		channel_obj["name"].get<std::string>().c_str(), -1, buf, len);
+						  channel_obj["name"].get<std::string>().c_str(), -1, buf, len);
 
 	return buf;
 }
@@ -407,7 +403,7 @@ const DWORD CBonTuner::GetCurChannel(void)
 // チャンネル設定
 const BOOL CBonTuner::SetChannel(const BYTE bCh)
 {
-	return SetChannel((DWORD)0,(DWORD)bCh - 13);
+	return SetChannel((DWORD)0, (DWORD)bCh - 13);
 }
 
 // チャンネル設定
@@ -422,7 +418,7 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 		return FALSE;
 	}
 
-	picojson::object& channel_obj =
+	picojson::object &channel_obj =
 		g_Channel_JSON.get(Bon_Channel).get<picojson::object>();
 
 	// Server request
@@ -431,16 +427,16 @@ const BOOL CBonTuner::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 	if (g_Service_Split == 1) {
 		const int64_t id = (int64_t)channel_obj["id"].get<double>();
 		swprintf_s(url, len,
-			L"/api/services/%lld/stream?decode=%d", id, g_DecodeB25);
+				   L"/api/services/%lld/stream?decode=%d", id, g_DecodeB25);
 	}
 	else {
 		const char *type = channel_obj["type"].get<std::string>().c_str();
 		const char *channel = channel_obj["channel"].get<std::string>().c_str();
 		swprintf_s(url, len,
-			L"/api/channels/%S/%S/stream?decode=%d", type, channel, g_DecodeB25);
+				   L"/api/channels/%S/%S/stream?decode=%d", type, channel, g_DecodeB25);
 	}
 	if (!SendRequest(url)) {
-		return TRUE;  // to complete channel setting
+		return TRUE; // to complete channel setting
 	}
 
 	// チャンネル情報更新
@@ -483,11 +479,11 @@ BOOL CBonTuner::InitChannel()
 		if (!g_Channel_JSON.contains(i)) {
 			break;
 		}
-		picojson::object& channel_obj =
+		picojson::object &channel_obj =
 			g_Channel_JSON.get(i).get<picojson::object>();
 		const char *type;
 		if (g_Service_Split == 1) {
-			picojson::object& channel_detail =
+			picojson::object &channel_detail =
 				channel_obj["channel"].get<picojson::object>();
 			type = channel_detail["type"].get<std::string>().c_str();
 		}
@@ -538,7 +534,7 @@ BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 	DWORD dwTotalSize = 0;
 	BOOL ret;
 
-	while(1) {
+	while (1) {
 		ret = WinHttpQueryDataAvailable(hRequest, &dwSize);
 		if (ret && dwSize > 0) {
 			data = (char *)malloc((size_t)dwTotalSize + dwSize + 1);
@@ -561,7 +557,8 @@ BOOL CBonTuner::GetApiChannels(picojson::value *channel_json, int service_split)
 		}
 	}
 
-	if (!data) {
+	if (!data)
+	{
 		return FALSE;
 	}
 
@@ -603,24 +600,23 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 
 		if (WINHTTP_INVALID_STATUS_CALLBACK ==
 			WinHttpSetStatusCallback(hRequest, InternetCallback,
-				WINHTTP_CALLBACK_FLAG_ALL_NOTIFICATIONS, NULL)) {
+									 WINHTTP_CALLBACK_FLAG_ALL_NOTIFICATIONS, NULL)) {
 			char szDebugOut[64];
 			sprintf_s(szDebugOut,
-				"%s: Callback function not set\n", g_TunerName);
+					  "%s: Callback function not set\n", g_TunerName);
 			::OutputDebugStringA(szDebugOut);
 			break;
 		}
 
-		const int len = 64;
+		const int len = 1024;
 		wchar_t szHeader[len];
 		swprintf_s(szHeader, len,
-			L"Connection: close\r\nX-Mirakurun-Priority: %d", g_Priority);
-
+				   L"Connection: close\r\nX-Mirakurun-Priority: %d\r\n%s\r\n%s\r\n%s\r\n%s", g_Priority, g_Header1, g_Header2, g_Header3, g_Header4);
 		int i = 0;
 		while (1) {
 			if (!WinHttpSendRequest(
-				hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
-				WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
+					hRequest, szHeader, -1L, WINHTTP_NO_REQUEST_DATA, 0,
+					WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0)) {
 				sprintf_s(szDebugOut, "%s: SendRequest failed\n", g_TunerName);
 				::OutputDebugStringA(szDebugOut);
 				break;
@@ -631,14 +627,14 @@ BOOL CBonTuner::SendRequest(wchar_t *url)
 			DWORD dwStatusCode = 0;
 			DWORD dwSize = sizeof(dwStatusCode);
 			WinHttpQueryHeaders(hRequest,
-				WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-				WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize,
-				WINHTTP_NO_HEADER_INDEX);
+								WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+								WINHTTP_HEADER_NAME_BY_INDEX, &dwStatusCode, &dwSize,
+								WINHTTP_NO_HEADER_INDEX);
 			if (dwStatusCode == HTTP_STATUS_OK) {
 				ret = TRUE;
 				break;
 			}
-			else{
+			else {
 				sprintf_s(szDebugOut, "%s: Tuner unavailable\n", g_TunerName);
 				::OutputDebugStringA(szDebugOut);
 			}
@@ -664,13 +660,13 @@ void CALLBACK CBonTuner::InternetCallback(
 {
 	switch (dwInternetStatus)
 	{
-		case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
-			SetEvent(g_hCloseEvent);
-			break;
-		case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR:
-			char szDebugOut[64];
-			sprintf_s(szDebugOut, "%s: Request error\n", g_TunerName);
-			::OutputDebugStringA(szDebugOut);
+	case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
+		SetEvent(g_hCloseEvent);
+		break;
+	case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR:
+		char szDebugOut[64];
+		sprintf_s(szDebugOut, "%s: Request error\n", g_TunerName);
+		::OutputDebugStringA(szDebugOut);
 	}
 }
 
@@ -683,7 +679,7 @@ UINT WINAPI CBonTuner::RecvThread(LPVOID pParam)
 
 	while (1) {
 		if (::WaitForSingleObject(pThis->m_hStopEvent, 0) != WAIT_TIMEOUT) {
-			//中止
+			// 中止
 			break;
 		}
 

@@ -22,6 +22,10 @@ static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };
 
 #define MAX_HOST_LEN 256
 static wchar_t g_ServerHost[MAX_HOST_LEN];
+static wchar_t g_Header1[MAX_HOST_LEN];
+static wchar_t g_Header2[MAX_HOST_LEN];
+static wchar_t g_Header3[MAX_HOST_LEN];
+static wchar_t g_Header4[MAX_HOST_LEN];
 static uint32_t g_ServerPort;
 static int g_Secure;
 static int g_DecodeB25;
