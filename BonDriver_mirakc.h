@@ -93,9 +93,9 @@ protected:
 	HINTERNET hSession;
 	HINTERNET hConnect;
 	HINTERNET hRequest;
-	DWORD TLSValue;
-	DWORD HTTPVersion;
 
+	DWORD m_dwTlsValue;
+	DWORD m_dwHttpVersion;
 	DWORD m_dwCurSpace;
 	DWORD m_dwCurChannel;
 
