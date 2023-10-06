@@ -54,6 +54,7 @@ static int Init(HMODULE hModule)
 	GetPrivateProfileStringW(L"GLOBAL", L"HEADER4", L"", g_Header4, MAX_HOST_LEN, g_IniFilePath);
 
 	g_Secure = GetPrivateProfileInt(L"GLOBAL", L"SECURE", 0, g_IniFilePath);
+	g_ReceiveTimeout = GetPrivateProfileInt(L"GLOBAL", L"RECEIVE_TIMEOUT", 30000, g_IniFilePath);
 
 	g_DecodeB25 = GetPrivateProfileInt(L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
 	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
@@ -152,6 +153,9 @@ const BOOL CBonTuner::OpenTuner()
 			WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &m_dwTlsValue, sizeof(m_dwTlsValue));
 			WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &m_dwHttpVersion, sizeof(m_dwHttpVersion));
 		}
+
+		// HTTPリクエストの受信タイムアウト
+		WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_TIMEOUT, &g_ReceiveTimeout, sizeof(g_ReceiveTimeout));
 
 		// サーバー接続
 		hConnect = WinHttpConnect(hSession, g_ServerHost, g_ServerPort, 0);

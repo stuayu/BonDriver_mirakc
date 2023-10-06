@@ -31,6 +31,7 @@ static int g_Secure;
 static int g_DecodeB25;
 static int g_Priority;
 static int g_Service_Split;
+static int g_ReceiveTimeout;
 
 #define SPACE_NUM 100
 static char *g_pType[SPACE_NUM];
