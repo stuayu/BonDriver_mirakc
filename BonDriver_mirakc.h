@@ -95,8 +95,6 @@ protected:
 	HINTERNET hConnect;
 	HINTERNET hRequest;
 
-	DWORD m_dwTlsValue;
-	DWORD m_dwHttpVersion;
 	DWORD m_dwCurSpace;
 	DWORD m_dwCurChannel;
 

@@ -92,8 +92,6 @@ CBonTuner::CBonTuner()
 	, hRequest(NULL)
 	, m_dwCurSpace(0xffffffff)
 	, m_dwCurChannel(0xffffffff)
-	, m_dwHttpVersion(NULL)
-	, m_dwTlsValue(NULL)
 {
 	m_pThis = this;
 
@@ -146,12 +144,13 @@ const BOOL CBonTuner::OpenTuner()
 			break;
 		}
 
-		// HTTP v2/v3 TLS1.2/1.3を有効化
+		// HTTP v2, TLS1.2/1.3を有効化
 		if (g_Secure == 1) {
-			m_dwTlsValue = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-			m_dwHttpVersion = WINHTTP_PROTOCOL_FLAG_HTTP2 | WINHTTP_PROTOCOL_FLAG_HTTP3;
-			WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &m_dwTlsValue, sizeof(m_dwTlsValue));
-			WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &m_dwHttpVersion, sizeof(m_dwHttpVersion));
+			DWORD dwTlsValue = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+			DWORD dwHttpVersion = WINHTTP_PROTOCOL_FLAG_HTTP2;
+			//DWORD dwHttpVersion = WINHTTP_PROTOCOL_FLAG_HTTP2 | WINHTTP_PROTOCOL_FLAG_HTTP3;
+			WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &dwTlsValue, sizeof(dwTlsValue));
+			WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &dwHttpVersion, sizeof(dwHttpVersion));
 		}
 
 		// HTTPリクエストの受信タイムアウト
