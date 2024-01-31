@@ -54,6 +54,7 @@ static int Init(HMODULE hModule)
 	GetPrivateProfileStringW(L"GLOBAL", L"HEADER4", L"", g_Header4, MAX_HOST_LEN, g_IniFilePath);
 
 	g_Secure = GetPrivateProfileInt(L"GLOBAL", L"SECURE", 0, g_IniFilePath);
+	g_ReceiveTimeout = GetPrivateProfileInt(L"GLOBAL", L"RECEIVE_TIMEOUT", 30000, g_IniFilePath);
 
 	g_DecodeB25 = GetPrivateProfileInt(L"GLOBAL", L"DECODE_B25", 0, g_IniFilePath);
 	g_Priority = GetPrivateProfileInt(L"GLOBAL", L"PRIORITY", 0, g_IniFilePath);
@@ -143,13 +144,17 @@ const BOOL CBonTuner::OpenTuner()
 			break;
 		}
 
-		// HTTP v2/v3 TLS1.2/1.3を有効化
+		// HTTP v2, TLS1.2/1.3を有効化
 		if (g_Secure == 1) {
-			TLSValue = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-			HTTPVersion = WINHTTP_PROTOCOL_FLAG_HTTP2 | WINHTTP_PROTOCOL_FLAG_HTTP3;
-			WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &TLSValue, sizeof(TLSValue));
-			WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &HTTPVersion, sizeof(HTTPVersion));
+			DWORD dwTlsValue = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+			DWORD dwHttpVersion = WINHTTP_PROTOCOL_FLAG_HTTP2;
+			//DWORD dwHttpVersion = WINHTTP_PROTOCOL_FLAG_HTTP2 | WINHTTP_PROTOCOL_FLAG_HTTP3;
+			WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &dwTlsValue, sizeof(dwTlsValue));
+			WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &dwHttpVersion, sizeof(dwHttpVersion));
 		}
+
+		// HTTPリクエストの受信タイムアウト
+		WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_TIMEOUT, &g_ReceiveTimeout, sizeof(g_ReceiveTimeout));
 
 		// サーバー接続
 		hConnect = WinHttpConnect(hSession, g_ServerHost, g_ServerPort, 0);
