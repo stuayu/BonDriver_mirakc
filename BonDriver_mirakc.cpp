@@ -487,9 +487,11 @@ BOOL CBonTuner::InitChannel()
 		picojson::object &channel_obj =
 			g_Channel_JSON.get(i).get<picojson::object>();
 		const char *type;
+
+		/* mirakurun dev版用の設定*/
 		if (g_Service_Split == 1) {
 			picojson::object &channel_detail =
-				channel_obj["channel"].get<picojson::object>();
+				channel_obj["channel"].get(0).get<picojson::object>();
 			type = channel_detail["type"].get<std::string>().c_str();
 		}
 		else {

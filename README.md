@@ -6,6 +6,9 @@ TVTestから[mirakc](https://github.com/masnagam/mirakc)を利用する為のBon
 Visual Studio Community 2022、TVTest 0.10.0-dev(x64)の環境で動作確認しております。
 Windows SDKの最新が必要です。
 
+> [!NOTE]
+> 最新コミットはMirakurunのdevブランチ専用のサービス選択機能が追加されています。  
+> ご注意ください。
 ## 変更点
 2023/03/09 HTTPSでの通信に対応(HTTP/2,~~HTTP/3~~,TLS1.2,TLS1.3)、iniのSECURE=1にすることで利用可
 ## License
