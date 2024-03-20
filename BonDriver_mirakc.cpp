@@ -490,9 +490,17 @@ BOOL CBonTuner::InitChannel()
 
 		/* mirakurun dev版用の設定*/
 		if (g_Service_Split == 1) {
-			picojson::object &channel_detail =
-				channel_obj["channel"].get(0).get<picojson::object>();
-			type = channel_detail["type"].get<std::string>().c_str();
+			if (!channel_obj["channel"].get(0).is<picojson::null>()) {
+				picojson::object& channel_detail =
+					channel_obj["channel"].get(0).get<picojson::object>();
+				type = channel_detail["type"].get<std::string>().c_str();
+			}
+			// 本家版でも動作するように変更
+			else {
+				picojson::object& channel_detail =
+					channel_obj["channel"].get<picojson::object>();
+				type = channel_detail["type"].get<std::string>().c_str();
+			}
 		}
 		else {
 			type = channel_obj["type"].get<std::string>().c_str();
