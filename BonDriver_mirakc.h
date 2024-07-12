@@ -16,6 +16,7 @@
 
 #define dllimport dllexport
 #define TUNER_NAME "BonDriver_mirakc"
+#define BUILD_VER "v2024.7.12"
 
 static const char g_TunerName[] = TUNER_NAME;
 static wchar_t g_IniFilePath[MAX_PATH] = { '\0' };
@@ -26,6 +27,7 @@ static wchar_t g_Header1[MAX_HOST_LEN];
 static wchar_t g_Header2[MAX_HOST_LEN];
 static wchar_t g_Header3[MAX_HOST_LEN];
 static wchar_t g_Header4[MAX_HOST_LEN];
+static wchar_t g_UserAgent[MAX_HOST_LEN];
 static uint32_t g_ServerPort;
 static int g_Secure;
 static int g_DecodeB25;

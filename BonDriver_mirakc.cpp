@@ -52,6 +52,8 @@ static int Init(HMODULE hModule)
 	GetPrivateProfileStringW(L"GLOBAL", L"HEADER2", L"", g_Header2, MAX_HOST_LEN, g_IniFilePath);
 	GetPrivateProfileStringW(L"GLOBAL", L"HEADER3", L"", g_Header3, MAX_HOST_LEN, g_IniFilePath);
 	GetPrivateProfileStringW(L"GLOBAL", L"HEADER4", L"", g_Header4, MAX_HOST_LEN, g_IniFilePath);
+	// ユーザーエージェントに追加したい文字列
+	GetPrivateProfileStringW(L"GLOBAL", L"USER_AGENT", L"", g_UserAgent, MAX_HOST_LEN, g_IniFilePath);
 
 	g_Secure = GetPrivateProfileInt(L"GLOBAL", L"SECURE", 0, g_IniFilePath);
 	g_ReceiveTimeout = GetPrivateProfileInt(L"GLOBAL", L"RECEIVE_TIMEOUT", 30000, g_IniFilePath);
@@ -135,7 +137,7 @@ const BOOL CBonTuner::OpenTuner()
 
 		// WinHTTP初期化
 		hSession = WinHttpOpen(
-			TEXT(TUNER_NAME "/1.0"), WINHTTP_ACCESS_TYPE_NO_PROXY,
+			(std::wstring(TEXT(TUNER_NAME "/" BUILD_VER "/")) + g_UserAgent).c_str(), WINHTTP_ACCESS_TYPE_NO_PROXY,
 			WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 		if (!hSession) {
 			char szDebugOut[64];
